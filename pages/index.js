@@ -98,17 +98,56 @@ async function identifyCards(base64, mimeType) {
   return JSON.parse(t.replace(/```json|```/g,"").trim());
 }
 
-async function enrichCard(name) {
+async function enrichCard(name, setCode, cardNumber) {
   try {
-    const q = encodeURIComponent(name.split(" ")[0]);
-    const r = await fetch(`https://apitcg.com/api/pokemon/cards?name=${q}`);
-    if (!r.ok) return null;
-    const data = await r.json();
-    const cards = data.data || [];
+    const cleanName = name.replace(/['"]/g, "").trim();
+    const num = cardNumber && cardNumber !== "?" ? cardNumber.split("/")[0].replace(/^0+/, "") : null;
+
+    let cards = [];
+
+    // Strategy 1: exact match by set.id + number (most precise)
+    if (setCode && setCode !== "?" && num) {
+      const r = await fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`set.id:"${setCode}" number:"${num}"`)}&pageSize=4&select=id,name,set,rarity,images,types,number`,
+        { headers: { "Accept": "application/json" } }
+      );
+      if (r.ok) { const d = await r.json(); cards = d.data || []; }
+    }
+
+    // Strategy 2: name + set.id
+    if (!cards.length && setCode && setCode !== "?") {
+      const r = await fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}" set.id:"${setCode}"`)}&pageSize=4&select=id,name,set,rarity,images,types,number`,
+        { headers: { "Accept": "application/json" } }
+      );
+      if (r.ok) { const d = await r.json(); cards = d.data || []; }
+    }
+
+    // Strategy 3: name only
+    if (!cards.length) {
+      const r = await fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}"`)}&pageSize=8&select=id,name,set,rarity,images,types,number`,
+        { headers: { "Accept": "application/json" } }
+      );
+      if (r.ok) { const d = await r.json(); cards = d.data || []; }
+    }
+
     if (!cards.length) return null;
-    const nl = name.toLowerCase();
-    const m = cards.find(c=>c.name?.toLowerCase()===nl) || cards.find(c=>c.name?.toLowerCase().includes(nl.split(" ")[0])) || cards[0];
-    return { officialName:m.name, rarity:m.rarity, set:m.set?.name||"?", number:m.number, image:m.images?.small||null, types:m.types||[] };
+
+    const nl = cleanName.toLowerCase();
+    const m = cards.find(c=>c.name?.toLowerCase()===nl)
+      || cards.find(c=>c.name?.toLowerCase().includes(nl.split(" ")[0].toLowerCase()))
+      || cards[0];
+
+    return {
+      officialName: m.name,
+      rarity:       m.rarity,
+      set:          m.set?.id || setCode || "?",
+      number:       m.number,
+      image:        m.images?.small || m.images?.large || null,
+      imageLarge:   m.images?.large || null,
+      types:        m.types || [],
+    };
   } catch { return null; }
 }
 
@@ -362,8 +401,8 @@ function ScanTab({inv, saveInv, showToast}) {
     for (let i=0; i<identified.length; i++) {
       setProgress({current:i+1, total:identified.length});
       const base = identified[i];
-      const api  = await enrichCard(base.name);
-      enriched.push({...base, id:uid(), rarity:api?.rarity||base.rarity||"Unknown", officialName:api?.officialName||base.name, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, types:api?.types||[], addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
+      const api  = await enrichCard(base.name, base.set, base.number);
+      enriched.push({...base, id:uid(), rarity:api?.rarity||base.rarity||"Unknown", officialName:api?.officialName||base.name, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
     }
     setScanned(enriched); setPhase("done");
   };
@@ -454,15 +493,21 @@ function ScanTab({inv, saveInv, showToast}) {
                       {/* Card image — full width referential */}
                       <div style={{display:"flex",gap:0}}>
                         {/* Image column */}
-                        <div style={{width:90,flexShrink:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"center",justifyContent:"center",minHeight:120}}>
-                          {card.image ? (
-                            <img src={card.image} alt={card.officialName||card.name}
-                              style={{width:82,objectFit:"contain",borderRadius:6,display:"block"}}
-                              onError={e=>{e.target.style.display="none";e.target.nextSibling.style.display="flex";}}
+                        <div style={{width:100,flexShrink:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",minHeight:140,padding:6}}>
+                          {(card.imageLarge||card.image) ? (
+                            <img
+                              src={card.imageLarge||card.image}
+                              alt={card.officialName||card.name}
+                              style={{width:88,borderRadius:8,display:"block",boxShadow:"0 4px 12px rgba(0,0,0,.5)"}}
+                              onError={e=>{
+                                if (card.image && e.target.src !== card.image) { e.target.src = card.image; }
+                                else { e.target.style.display="none"; e.target.nextSibling.style.display="flex"; }
+                              }}
                             />
                           ) : null}
-                          <div style={{display:card.image?"none":"flex",alignItems:"center",justifyContent:"center",width:82,height:114,borderRadius:6,background:`${r.color}15`,border:`1px solid ${r.color}30`}}>
+                          <div style={{display:(card.imageLarge||card.image)?"none":"flex",alignItems:"center",justifyContent:"center",width:88,height:123,borderRadius:8,background:`${r.color}15`,border:`1px solid ${r.color}30`,flexDirection:"column",gap:4}}>
                             <span style={{fontSize:28}}>🃏</span>
+                            <span style={{fontSize:9,color:"#475569"}}>Sin imagen</span>
                           </div>
                         </div>
                         {/* Info column */}
