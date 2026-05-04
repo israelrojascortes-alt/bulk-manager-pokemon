@@ -70,7 +70,7 @@ async function callClaude(body) {
 
 async function identifyCards(base64, mimeType) {
   const d = await callClaude({
-    system: `You are a Pokémon TCG expert. Identify each Pokémon card visible.
+    system: "You are a Pokémon TCG card scanner. READ the EXACT text printed on each card.\n\nRULES:\n- Read the card NAME exactly as printed (top of card)\n- Read SET name from bottom of card\n- Read card NUMBER (e.g. 163/217) from bottom\n- Do NOT guess or invent names\n- Each card is a separate object\n\nReturn ONLY valid JSON:\n{\"cards\":[{\"name\":\"exact name\",\"set\":\"set name or ?\",\"number\":\"number or ?\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n\nIf no cards visible return {\"cards\":[]}.",
 Return ONLY valid JSON: {"cards":[{"name":"...","set":"...","number":"...","rarity":"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret","language":"English|Spanish|Japanese|Other","condition":"Mint|Near Mint|Good|Played|Poor"}]}
 If no cards, return {"cards":[]}.`,
     messages: [{role:"user",content:[
