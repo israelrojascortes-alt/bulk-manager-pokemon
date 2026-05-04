@@ -114,25 +114,25 @@ async function enrichCard(name, setCode, cardNumber) {
 
     let cards = [];
 
-    // Strategy 1: English set.id + number — most precise
-    if (enSet && enSet !== "?" && num) {
+    // For Japanese cards: search by name + English set (ignore number — numbering differs JP vs EN)
+    if (enSet && enSet !== "?") {
       const r = await fetch(
-        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`set.id:"${enSet}" number:"${num}"`)}&pageSize=4&select=id,name,set,rarity,images,types,number`,
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}" set.id:"${enSet}"`)}&pageSize=8&select=id,name,set,rarity,images,types,number&orderBy=number`,
         { headers: { "Accept": "application/json" } }
       );
       if (r.ok) { const d = await r.json(); cards = d.data || []; }
     }
 
-    // Strategy 2: name + English set.id
-    if (!cards.length && enSet && enSet !== "?") {
+    // Fallback: if set not found, try name + series prefix (sv = Scarlet & Violet era)
+    if (!cards.length && setCode?.startsWith("sv")) {
       const r = await fetch(
-        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}" set.id:"${enSet}"`)}&pageSize=4&select=id,name,set,rarity,images,types,number`,
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}" set.series:"Scarlet & Violet"`)}&pageSize=8&select=id,name,set,rarity,images,types,number&orderBy=-set.releaseDate`,
         { headers: { "Accept": "application/json" } }
       );
       if (r.ok) { const d = await r.json(); cards = d.data || []; }
     }
 
-    // Strategy 3: name only, most recent first
+    // Last resort: name only, most recent first
     if (!cards.length) {
       const r = await fetch(
         `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}"`)}&pageSize=10&select=id,name,set,rarity,images,types,number&orderBy=-set.releaseDate`,
@@ -152,7 +152,7 @@ async function enrichCard(name, setCode, cardNumber) {
       officialName: m.name,
       rarity:       m.rarity,
       set:          setCode || m.set?.id || "?",  // keep original JP code for display
-      number:       num || m.number,
+      number:       num || m.number,              // keep original JP number
       image:        m.images?.small || null,
       imageLarge:   m.images?.large || null,
       types:        m.types || [],
