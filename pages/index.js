@@ -61,7 +61,7 @@ async function callClaude(body) {
   const res = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1000, ...body }),
+    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, ...body }),
   });
   const d = await res.json();
   if (d.error) throw new Error(typeof d.error === "string" ? d.error : d.error.message || "Error API");
@@ -325,13 +325,13 @@ function ScanTab({inv, saveInv, showToast}) {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        const MAX = 1200;
+        const MAX = 2000;
         let w = img.width, h = img.height;
         if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
         if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
         canvas.width = w; canvas.height = h;
         canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        const compressed = canvas.toDataURL("image/jpeg", 0.85);
+        const compressed = canvas.toDataURL("image/jpeg", 0.92);
         setImgData({ base64: compressed.split(",")[1], type: "image/jpeg", preview: compressed });
         setScanned(null); setError(null); setPhase("idle"); setSaved(false);
       };
