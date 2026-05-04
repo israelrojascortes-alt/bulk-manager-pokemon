@@ -72,18 +72,19 @@ async function identifyCards(base64, mimeType) {
   const systemPrompt = "You are a Pokémon TCG card scanner expert specializing in ALL languages including Japanese.\n" +
     "For each card, carefully read:\n" +
     "1. The NAME at the top (may be in Japanese katakana/hiragana, English, or Spanish)\n" +
-    "2. The SET CODE at the bottom left corner (e.g. sv8a, sv2a, sv6, sv4, sv1S, etc.)\n" +
+    "2. The SET CODE at the bottom left corner — return the CODE exactly as printed (e.g. sv8a, sv2a, sv6, sv4, sv1S, SV, etc.)\n" +
     "3. The CARD NUMBER at bottom (e.g. 059/187, 066/193)\n" +
     "4. The RARITY symbol at bottom right\n\n" +
     "For JAPANESE cards, translate the Pokemon name to English in the 'name' field.\n\n" +
-    "Japanese set codes and names:\n" +
+    "IMPORTANT: For the 'set' field, return ONLY the set code (e.g. 'sv8a', 'sv2a', 'sv4') NOT the full name.\n\n" +
+    "Japanese set codes reference (to help identify):\n" +
     "sv8a=Terastal Festival ex | sv8b=Battle Partners | sv8=Super Electric Breaker | " +
     "sv7a=Paradise Dragona | sv7=Stellar Miracle | sv6a=Mask of Change | sv6=Transformation Mask | " +
     "sv5a=Crimson Haze | sv5b=Cyber Judge | sv5=Wild Force | sv4a=Shiny Treasure ex | " +
     "sv4b=Future Flash | sv4=Ancient Roar | sv3a=Pokemon Card 151 | sv2a=Pokemon Card 151 | " +
     "sv2b=Clay Burst | sv2=Snow Hazard | sv1a=Triplet Beat | sv1S=Scarlet ex | sv1V=Violet ex\n\n" +
     "Return ONLY valid JSON:\n" +
-    "{\"cards\":[{\"name\":\"English name\",\"set\":\"set name\",\"number\":\"number/total\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n" +
+    "{\"cards\":[{\"name\":\"English name\",\"set\":\"set CODE only e.g. sv8a\",\"number\":\"number/total\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n" +
     "If no Pokemon cards visible, return {\"cards\":[]}.";
 
   const d = await callClaude({
