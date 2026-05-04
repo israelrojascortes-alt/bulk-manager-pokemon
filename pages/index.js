@@ -446,23 +446,47 @@ function ScanTab({inv, saveInv, showToast}) {
                   </div>
                 ))}
               </div>
-              <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+              <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:14}}>
                 {scanned.map((card,i)=>{
                   const r=rd(card.rarity);
                   return (
-                    <div key={i} style={{display:"flex",gap:10,padding:"10px 12px",background:"rgba(13,17,23,.95)",border:`1px solid ${r.color}22`,borderRadius:14,alignItems:"center"}}>
-                      <CardArt card={card} size={44}/>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:14,fontWeight:700,color:"#e2e8f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.officialName||card.name}</div>
-                        <div style={{fontSize:11,color:"#475569",marginTop:1}}>{card.officialSet}{card.number&&card.number!=="?"?` #${card.number}`:""}</div>
-                        <div style={{display:"flex",gap:5,marginTop:5}}>
-                          <span style={{fontSize:10,padding:"2px 7px",borderRadius:5,background:`${r.color}22`,color:r.color}}>{r.label}</span>
-                          {card.enriched&&<span style={{fontSize:10,padding:"2px 7px",borderRadius:5,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>✓ apitcg</span>}
+                    <div key={i} style={{background:"rgba(13,17,23,.95)",border:`1px solid ${r.color}33`,borderRadius:16,overflow:"hidden"}}>
+                      {/* Card image — full width referential */}
+                      <div style={{display:"flex",gap:0}}>
+                        {/* Image column */}
+                        <div style={{width:90,flexShrink:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"center",justifyContent:"center",minHeight:120}}>
+                          {card.image ? (
+                            <img src={card.image} alt={card.officialName||card.name}
+                              style={{width:82,objectFit:"contain",borderRadius:6,display:"block"}}
+                              onError={e=>{e.target.style.display="none";e.target.nextSibling.style.display="flex";}}
+                            />
+                          ) : null}
+                          <div style={{display:card.image?"none":"flex",alignItems:"center",justifyContent:"center",width:82,height:114,borderRadius:6,background:`${r.color}15`,border:`1px solid ${r.color}30`}}>
+                            <span style={{fontSize:28}}>🃏</span>
+                          </div>
                         </div>
-                      </div>
-                      <div style={{textAlign:"right",flexShrink:0}}>
-                        <div style={{fontFamily:"monospace",fontSize:13,color:"#facc15",fontWeight:700}}>{fclp(r.min)}</div>
-                        <div style={{fontSize:9,color:"#475569"}}>est</div>
+                        {/* Info column */}
+                        <div style={{flex:1,padding:"12px 14px",display:"flex",flexDirection:"column",justifyContent:"space-between"}}>
+                          <div>
+                            <div style={{fontSize:15,fontWeight:700,color:"#e2e8f0",marginBottom:3}}>{card.officialName||card.name}</div>
+                            <div style={{fontSize:12,color:"#64748b",fontFamily:"monospace",marginBottom:8}}>
+                              {card.officialSet||card.set}
+                              {card.number&&card.number!=="?"?` · ${card.number}`:""}
+                            </div>
+                            <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                              <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:`${r.color}22`,color:r.color,fontWeight:600}}>{r.label}</span>
+                              <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{card.language}</span>
+                              <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{card.condition}</span>
+                            </div>
+                          </div>
+                          <div style={{marginTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                            <div>
+                              <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}</div>
+                              <div style={{fontSize:9,color:"#475569"}}>precio estimado CLP</div>
+                            </div>
+                            {card.enriched&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>✓ apitcg</span>}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   );
