@@ -69,22 +69,28 @@ async function callClaude(body) {
 }
 
 async function identifyCards(base64, mimeType) {
-  const systemPrompt = "You are a Pokémon TCG card scanner. READ the EXACT text printed on each card in the photo.\n" +
-    "RULES:\n" +
-    "- Read the card NAME exactly as printed at the top of each card\n" +
-    "- Read the SET name from the bottom of the card\n" +
-    "- Read the card NUMBER (e.g. 163/217) from the bottom\n" +
-    "- Identify ALL cards visible, even partial ones\n" +
-    "- Do NOT guess or invent names\n" +
-    "- Each card must be a separate object in the array\n\n" +
-    "Return ONLY valid JSON: {\"cards\":[{\"name\":\"exact name\",\"set\":\"set or ?\",\"number\":\"number or ?\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n" +
+  const systemPrompt = "You are a Pokémon TCG card scanner expert specializing in ALL languages including Japanese.\n" +
+    "For each card, carefully read:\n" +
+    "1. The NAME at the top (may be in Japanese katakana/hiragana, English, or Spanish)\n" +
+    "2. The SET CODE at the bottom left corner (e.g. sv8a, sv2a, sv6, sv4, sv1S, etc.)\n" +
+    "3. The CARD NUMBER at bottom (e.g. 059/187, 066/193)\n" +
+    "4. The RARITY symbol at bottom right\n\n" +
+    "For JAPANESE cards, translate the Pokemon name to English in the 'name' field.\n\n" +
+    "Japanese set codes and names:\n" +
+    "sv8a=Terastal Festival ex | sv8b=Battle Partners | sv8=Super Electric Breaker | " +
+    "sv7a=Paradise Dragona | sv7=Stellar Miracle | sv6a=Mask of Change | sv6=Transformation Mask | " +
+    "sv5a=Crimson Haze | sv5b=Cyber Judge | sv5=Wild Force | sv4a=Shiny Treasure ex | " +
+    "sv4b=Future Flash | sv4=Ancient Roar | sv3a=Pokemon Card 151 | sv2a=Pokemon Card 151 | " +
+    "sv2b=Clay Burst | sv2=Snow Hazard | sv1a=Triplet Beat | sv1S=Scarlet ex | sv1V=Violet ex\n\n" +
+    "Return ONLY valid JSON:\n" +
+    "{\"cards\":[{\"name\":\"English name\",\"set\":\"set name\",\"number\":\"number/total\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n" +
     "If no Pokemon cards visible, return {\"cards\":[]}.";
 
   const d = await callClaude({
     system: systemPrompt,
     messages: [{role:"user",content:[
       {type:"image",source:{type:"base64",media_type:mimeType,data:base64}},
-      {type:"text",text:"Identify ALL Pokemon cards visible in this image. There may be multiple cards - list each one separately."}
+      {type:"text",text:"Identify ALL Pokemon cards in this image. For each card read: the name, the set name (check bottom of card carefully), the card number, and the rarity. List each card separately."}
     ]}]
   });
   const t = d.content?.find(b=>b.type==="text")?.text || "{}";
