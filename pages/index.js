@@ -69,13 +69,22 @@ async function callClaude(body) {
 }
 
 async function identifyCards(base64, mimeType) {
+  const systemPrompt = "You are a Pokémon TCG card scanner. READ the EXACT text printed on each card in the photo.\n" +
+    "RULES:\n" +
+    "- Read the card NAME exactly as printed at the top of each card\n" +
+    "- Read the SET name from the bottom of the card\n" +
+    "- Read the card NUMBER (e.g. 163/217) from the bottom\n" +
+    "- Identify ALL cards visible, even partial ones\n" +
+    "- Do NOT guess or invent names\n" +
+    "- Each card must be a separate object in the array\n\n" +
+    "Return ONLY valid JSON: {\"cards\":[{\"name\":\"exact name\",\"set\":\"set or ?\",\"number\":\"number or ?\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n" +
+    "If no Pokemon cards visible, return {\"cards\":[]}.";
+
   const d = await callClaude({
-    system: "You are a Pokémon TCG card scanner. READ the EXACT text printed on each card.\n\nRULES:\n- Read the card NAME exactly as printed (top of card)\n- Read SET name from bottom of card\n- Read card NUMBER (e.g. 163/217) from bottom\n- Do NOT guess or invent names\n- Each card is a separate object\n\nReturn ONLY valid JSON:\n{\"cards\":[{\"name\":\"exact name\",\"set\":\"set name or ?\",\"number\":\"number or ?\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n\nIf no cards visible return {\"cards\":[]}.",
-Return ONLY valid JSON: {"cards":[{"name":"...","set":"...","number":"...","rarity":"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret","language":"English|Spanish|Japanese|Other","condition":"Mint|Near Mint|Good|Played|Poor"}]}
-If no cards, return {"cards":[]}.`,
+    system: systemPrompt,
     messages: [{role:"user",content:[
       {type:"image",source:{type:"base64",media_type:mimeType,data:base64}},
-      {type:"text",text:"Identify ALL Pokémon cards visible in this image. There may be multiple cards. List each one separately."}
+      {type:"text",text:"Identify ALL Pokemon cards visible in this image. There may be multiple cards - list each one separately."}
     ]}]
   });
   const t = d.content?.find(b=>b.type==="text")?.text || "{}";
@@ -313,21 +322,23 @@ function ScanTab({inv, saveInv, showToast}) {
     if (!file?.type.startsWith("image/")) return;
     const reader = new FileReader();
     reader.onload = e => {
-  const img = new Image();
-  img.onload = () => {
-    const canvas = document.createElement("canvas");
-    const MAX = 1200;
-    let w = img.width, h = img.height;
-    if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
-    if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
-    canvas.width = w; canvas.height = h;
-    canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-    const compressed = canvas.toDataURL("image/jpeg", 0.85);
-    setImgData({ base64: compressed.split(",")[1], type: "image/jpeg", preview: compressed });
-    setScanned(null); setError(null); setPhase("idle"); setSaved(false);
-  };
-  img.src = e.target.result;
-};
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX = 1200;
+        let w = img.width, h = img.height;
+        if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+        if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const compressed = canvas.toDataURL("image/jpeg", 0.85);
+        setImgData({ base64: compressed.split(",")[1], type: "image/jpeg", preview: compressed });
+        setScanned(null); setError(null); setPhase("idle"); setSaved(false);
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }, []);
 
   const reset = () => { setImgData(null); setPhase("idle"); setScanned(null); setError(null); setSaved(false); };
 
