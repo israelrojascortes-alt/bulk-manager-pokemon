@@ -61,7 +61,7 @@ async function callClaude(body) {
   const res = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, ...body }),
+    body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1000, ...body }),
   });
   const d = await res.json();
   if (d.error) throw new Error(typeof d.error === "string" ? d.error : d.error.message || "Error API");
