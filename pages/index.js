@@ -110,56 +110,42 @@ const JP_TO_EN_SET = {
 };
 
 // TCGdex: search by set + number (exact match for JP/ES/FR etc.)
-async function enrichCardTCGdex(name, setCode, cardNumber, langCode) {
+async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
   try {
-    const num = cardNumber && cardNumber !== "?" ? cardNumber.split("/")[0] : null;
+    // Keep original number with leading zeros for TCGdex
+    const numRaw = cardNumber && cardNumber !== "?" ? cardNumber.split("/")[0] : null;
+    const numPadded = numRaw ? numRaw.padStart(3, "0") : null;
+    const numPlain  = numRaw ? numRaw.replace(/^0+/, "") : null;
 
-    // Strategy 1: set ID + local ID (most precise for JP)
-    if (setCode && num) {
-      const r = await fetch(`https://api.tcgdex.net/v2/${langCode}/sets/${setCode}/${num}`);
-      if (r.ok) {
-        const d = await r.json();
-        if (d && d.image) {
-          return {
-            officialName: d.name || name,
-            rarity:       d.rarity || null,
-            set:          setCode,
-            number:       num,
-            image:        d.image + "/low.webp",
-            imageLarge:   d.image + "/high.webp",
-            types:        d.types || [],
-            source:       "tcgdex",
-          };
-        }
-      }
+    let d = null;
+
+    // Try padded number first (e.g. "059"), then plain ("59")
+    for (const n of [numPadded, numPlain].filter(Boolean)) {
+      const r = await fetch(`https://api.tcgdex.net/v2/${langCode}/sets/${setCode}/${n}`);
+      if (r.ok) { d = await r.json(); if (d?.image) break; }
     }
 
-    // Strategy 2: search by name in the set
-    if (setCode) {
-      const r = await fetch(
-        `https://api.tcgdex.net/v2/${langCode}/cards?name=${encodeURIComponent(name)}&set.id=${setCode}&pagination:limit=5`
-      );
-      if (r.ok) {
-        const cards = await r.json();
-        const arr = Array.isArray(cards) ? cards : [];
-        if (arr.length) {
-          const card = arr[0];
-          const detail = await fetch(`https://api.tcgdex.net/v2/${langCode}/cards/${card.id}`);
-          if (detail.ok) {
-            const d = await detail.json();
-            if (d?.image) return {
-              officialName: d.name || name,
-              rarity:       d.rarity || null,
-              set:          setCode,
-              number:       num || d.localId,
-              image:        d.image + "/low.webp",
-              imageLarge:   d.image + "/high.webp",
-              types:        d.types || [],
-              source:       "tcgdex",
-            };
-          }
+    if (d?.image) {
+      // Get English name from TCGdex English endpoint
+      let englishNameFinal = englishName;
+      try {
+        for (const n of [numPadded, numPlain].filter(Boolean)) {
+          const re = await fetch(`https://api.tcgdex.net/v2/en/sets/${setCode}/${n}`);
+          if (re.ok) { const de = await re.json(); if (de?.name) { englishNameFinal = de.name; break; } }
         }
-      }
+      } catch {}
+
+      return {
+        officialName: englishNameFinal,     // English name
+        nativeName:   d.name || null,       // Japanese/Spanish name from TCGdex
+        rarity:       d.rarity || null,
+        set:          setCode,
+        number:       numRaw,
+        image:        d.image + "/low.webp",
+        imageLarge:   d.image + "/high.webp",
+        types:        d.types || [],
+        source:       "tcgdex",
+      };
     }
     return null;
   } catch { return null; }
@@ -174,7 +160,20 @@ async function enrichCard(name, setCode, cardNumber, language) {
     // For non-English cards: try TCGdex first (has native JP/ES/FR images)
     if (langCode && langCode !== "en") {
       const tcgResult = await enrichCardTCGdex(cleanName, setCode, num, langCode);
-      if (tcgResult) return tcgResult;
+      if (tcgResult) {
+        // Also fetch Spanish name if card is Japanese
+        let nameEs = null;
+        if (language === "Japanese") {
+          try {
+            const numPad = num ? num.padStart(3,"0") : null;
+            for (const n of [numPad, num].filter(Boolean)) {
+              const r = await fetch(`https://api.tcgdex.net/v2/es/sets/${setCode}/${n}`);
+              if (r.ok) { const d = await r.json(); nameEs = d?.name||null; break; }
+            }
+          } catch {}
+        }
+        return { ...tcgResult, nameEs };
+      }
     }
 
     // For English cards or TCGdex fallback: use pokemontcg.io
@@ -213,7 +212,8 @@ async function enrichCard(name, setCode, cardNumber, language) {
       || cards[0];
 
     return {
-      officialName: m.name,
+      officialName: cleanName,           // keep English name from Claude
+      nativeName:   null,                // no native name from pokemontcg.io
       rarity:       m.rarity,
       set:          setCode || m.set?.id || "?",
       number:       num || m.number,
@@ -476,7 +476,7 @@ function ScanTab({inv, saveInv, showToast}) {
       setProgress({current:i+1, total:identified.length});
       const base = identified[i];
       const api  = await enrichCard(base.name, base.set, base.number, base.language);
-      enriched.push({...base, id:uid(), rarity:api?.rarity||base.rarity||"Unknown", officialName:api?.officialName||base.name, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
+      enriched.push({...base, id:uid(), rarity:api?.rarity||base.rarity||"Unknown", officialName:api?.officialName||base.name, nativeName:api?.nativeName||null, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], source:api?.source||null, addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
     }
     setScanned(enriched); setPhase("done");
   };
@@ -587,7 +587,9 @@ function ScanTab({inv, saveInv, showToast}) {
                         {/* Info column */}
                         <div style={{flex:1,padding:"12px 14px",display:"flex",flexDirection:"column",justifyContent:"space-between"}}>
                           <div>
-                            <div style={{fontSize:15,fontWeight:700,color:"#e2e8f0",marginBottom:3}}>{card.officialName||card.name}</div>
+                            <div style={{fontSize:15,fontWeight:700,color:"#e2e8f0",marginBottom:1}}>{card.officialName||card.name}</div>
+                            {card.nameEs&&<div style={{fontSize:12,color:"#facc15",marginBottom:2}}>🇪🇸 {card.nameEs}</div>}
+                            {card.nativeName&&card.language==="Japanese"&&<div style={{fontSize:11,color:"#64748b",marginBottom:3}}>🇯🇵 {card.nativeName}</div>}
                             <div style={{fontSize:12,color:"#64748b",fontFamily:"monospace",marginBottom:8}}>
                               {card.officialSet||card.set}
                               {card.number&&card.number!=="?"?` · ${card.number}`:""}
