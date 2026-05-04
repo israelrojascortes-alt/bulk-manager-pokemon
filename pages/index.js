@@ -313,11 +313,21 @@ function ScanTab({inv, saveInv, showToast}) {
     if (!file?.type.startsWith("image/")) return;
     const reader = new FileReader();
     reader.onload = e => {
-      setImgData({ base64: e.target.result.split(",")[1], type: file.type, preview: e.target.result });
-      setScanned(null); setError(null); setPhase("idle"); setSaved(false);
-    };
-    reader.readAsDataURL(file);
-  }, []);
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement("canvas");
+    const MAX = 1200;
+    let w = img.width, h = img.height;
+    if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+    if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
+    canvas.width = w; canvas.height = h;
+    canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+    const compressed = canvas.toDataURL("image/jpeg", 0.85);
+    setImgData({ base64: compressed.split(",")[1], type: "image/jpeg", preview: compressed });
+    setScanned(null); setError(null); setPhase("idle"); setSaved(false);
+  };
+  img.src = e.target.result;
+};
 
   const reset = () => { setImgData(null); setPhase("idle"); setScanned(null); setError(null); setSaved(false); };
 
