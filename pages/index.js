@@ -68,34 +68,73 @@ async function callClaude(body) {
   return d;
 }
 
+// Known set code corrections (common misreads)
+const SET_CODE_FIXES = {
+  "sv8b":"sv8a", "svb8":"sv8a", "sv8":"sv8a",  // Terastal Festival often misread
+  "sv2b":"sv2a",                                 // Pokemon 151 misread
+  "sv4a":"sv8a",                                 // Common confusion
+  "svba":"sv8a", "sv8ba":"sv8a",
+};
+
+function robustJsonParse(text) {
+  if (!text) return { cards:[] };
+  // Remove markdown fences
+  let clean = text.replace(/```json|```/g, "").trim();
+  // Find the JSON object/array boundaries
+  const start = clean.indexOf("{");
+  const end   = clean.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    clean = clean.slice(start, end + 1);
+  }
+  try {
+    return JSON.parse(clean);
+  } catch {
+    // Try to extract partial cards array
+    try {
+      const match = clean.match(/"cards"\s*:\s*(\[[\s\S]*?\])/);
+      if (match) return { cards: JSON.parse(match[1]) };
+    } catch {}
+    return { cards:[] };
+  }
+}
+
 async function identifyCards(base64, mimeType) {
   const systemPrompt = "You are a Pokémon TCG card scanner expert specializing in ALL languages including Japanese.\n" +
     "For each card, carefully read:\n" +
-    "1. The NAME at the top (may be in Japanese katakana/hiragana, English, or Spanish)\n" +
-    "2. The SET CODE at the bottom left corner — return the CODE exactly as printed (e.g. sv8a, sv2a, sv6, sv4, sv1S, SV, etc.)\n" +
+    "1. The NAME at the top (may be in Japanese katakana/hiragana, English, or Spanish). Translate Japanese names to English.\n" +
+    "2. The SET CODE at the bottom left corner — read it VERY carefully (e.g. sv8a, sv2a, sv6, sv4). sv8a ≠ sv8b ≠ sv8.\n" +
     "3. The CARD NUMBER at bottom (e.g. 059/187, 066/193)\n" +
-    "4. The RARITY symbol at bottom right\n\n" +
-    "For JAPANESE cards, translate the Pokemon name to English in the 'name' field.\n\n" +
-    "IMPORTANT: For the 'set' field, return ONLY the set code (e.g. 'sv8a', 'sv2a', 'sv4') NOT the full name.\n\n" +
-    "Japanese set codes reference (to help identify):\n" +
-    "sv8a=Terastal Festival ex | sv8b=Battle Partners | sv8=Super Electric Breaker | " +
+    "4. The RARITY: look for star symbols (1 star=Rare, star+H=Holo, 2 stars=Ultra)\n\n" +
+    "Japanese set codes:\n" +
+    "sv8a=Terastal Festival ex(187 cards) | sv8b=Battle Partners | sv8=Super Electric Breaker(180 cards) | " +
     "sv7a=Paradise Dragona | sv7=Stellar Miracle | sv6a=Mask of Change | sv6=Transformation Mask | " +
-    "sv5a=Crimson Haze | sv5b=Cyber Judge | sv5=Wild Force | sv4a=Shiny Treasure ex | " +
-    "sv4b=Future Flash | sv4=Ancient Roar | sv3a=Pokemon Card 151 | sv2a=Pokemon Card 151 | " +
-    "sv2b=Clay Burst | sv2=Snow Hazard | sv1a=Triplet Beat | sv1S=Scarlet ex | sv1V=Violet ex\n\n" +
-    "Return ONLY valid JSON:\n" +
-    "{\"cards\":[{\"name\":\"English name\",\"set\":\"set CODE only e.g. sv8a\",\"number\":\"number/total\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n" +
+    "sv5a=Crimson Haze | sv5b=Cyber Judge | sv5=Wild Force | sv4a=Shiny Treasure ex(190 cards) | " +
+    "sv4b=Future Flash | sv4=Ancient Roar | sv3a=Raging Surf | sv3=Ruler of Black Flame | " +
+    "sv2a=Pokemon Card 151(165 cards) | sv2b=Clay Burst | sv2=Snow Hazard | " +
+    "sv1a=Triplet Beat | sv1S=Scarlet ex | sv1V=Violet ex | " +
+    "Hint: use the total card count (e.g. /187 → sv8a, /165 → sv2a, /190 → sv4a)\n\n" +
+    "Return ONLY valid JSON, nothing else:\n" +
+    "{\"cards\":[{\"name\":\"English name\",\"set\":\"set CODE\",\"number\":\"number/total\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n" +
     "If no Pokemon cards visible, return {\"cards\":[]}.";
 
   const d = await callClaude({
     system: systemPrompt,
     messages: [{role:"user",content:[
       {type:"image",source:{type:"base64",media_type:mimeType,data:base64}},
-      {type:"text",text:"Identify ALL Pokemon cards in this image. For each card read: the name, the set name (check bottom of card carefully), the card number, and the rarity. List each card separately."}
+      {type:"text",text:"Identify ALL Pokemon cards. For each: translate name to English, read set code carefully, read card number."}
     ]}]
   });
   const t = d.content?.find(b=>b.type==="text")?.text || "{}";
-  return JSON.parse(t.replace(/```json|```/g,"").trim());
+  const result = robustJsonParse(t);
+
+  // Auto-correct known set code misreads
+  if (result.cards) {
+    result.cards = result.cards.map(card => ({
+      ...card,
+      set: SET_CODE_FIXES[card.set] || card.set,
+    }));
+  }
+  return result;
 }
 
 // TCGdex language codes
@@ -128,24 +167,38 @@ async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
     if (d?.image) {
       // Get English name from TCGdex English endpoint
       let englishNameFinal = englishName;
+      let nameMatches = false;
       try {
         for (const n of [numPadded, numPlain].filter(Boolean)) {
           const re = await fetch(`https://api.tcgdex.net/v2/en/sets/${setCode}/${n}`);
-          if (re.ok) { const de = await re.json(); if (de?.name) { englishNameFinal = de.name; break; } }
+          if (re.ok) {
+            const de = await re.json();
+            if (de?.name) {
+              englishNameFinal = de.name;
+              // Validate: check if returned name matches what Claude identified
+              const expectedLower = englishName.toLowerCase().split(" ")[0];
+              const returnedLower = de.name.toLowerCase().split(" ")[0];
+              nameMatches = returnedLower.includes(expectedLower) || expectedLower.includes(returnedLower);
+              break;
+            }
+          }
         }
       } catch {}
 
-      return {
-        officialName: englishNameFinal,     // English name
-        nativeName:   d.name || null,       // Japanese/Spanish name from TCGdex
-        rarity:       d.rarity || null,
-        set:          setCode,
-        number:       numRaw,
-        image:        d.image + "/low.webp",
-        imageLarge:   d.image + "/high.webp",
-        types:        d.types || [],
-        source:       "tcgdex",
-      };
+      // Only use TCGdex image if name matches — otherwise fall through to pokemontcg.io
+      if (nameMatches) {
+        return {
+          officialName: englishNameFinal,
+          nativeName:   d.name || null,
+          rarity:       d.rarity || null,
+          set:          setCode,
+          number:       numRaw,
+          image:        d.image + "/low.webp",
+          imageLarge:   d.image + "/high.webp",
+          types:        d.types || [],
+          source:       "tcgdex",
+        };
+      }
     }
     return null;
   } catch { return null; }
