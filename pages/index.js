@@ -98,7 +98,10 @@ async function identifyCards(base64, mimeType) {
   return JSON.parse(t.replace(/```json|```/g,"").trim());
 }
 
-// Japanese set code → English set code mapping for pokemontcg.io
+// TCGdex language codes
+const LANG_TO_TCGDEX = { "Japanese":"ja", "Spanish":"es", "French":"fr", "German":"de", "Italian":"it" };
+
+// Japanese set code → English set code (for pokemontcg.io fallback)
 const JP_TO_EN_SET = {
   "sv1S":"sv1","sv1V":"sv1","sv1a":"svp","sv2":"sv2","sv2a":"sv3pt5","sv2b":"sv2",
   "sv3":"sv3","sv3a":"sv3pt5","sv4":"sv4","sv4a":"sv4pt5","sv4b":"sv4",
@@ -106,15 +109,78 @@ const JP_TO_EN_SET = {
   "sv7":"sv7","sv7a":"sv8","sv8":"sv8","sv8a":"sv8pt5","sv8b":"sv9","sv9":"sv9",
 };
 
-async function enrichCard(name, setCode, cardNumber) {
+// TCGdex: search by set + number (exact match for JP/ES/FR etc.)
+async function enrichCardTCGdex(name, setCode, cardNumber, langCode) {
+  try {
+    const num = cardNumber && cardNumber !== "?" ? cardNumber.split("/")[0] : null;
+
+    // Strategy 1: set ID + local ID (most precise for JP)
+    if (setCode && num) {
+      const r = await fetch(`https://api.tcgdex.net/v2/${langCode}/sets/${setCode}/${num}`);
+      if (r.ok) {
+        const d = await r.json();
+        if (d && d.image) {
+          return {
+            officialName: d.name || name,
+            rarity:       d.rarity || null,
+            set:          setCode,
+            number:       num,
+            image:        d.image + "/low.webp",
+            imageLarge:   d.image + "/high.webp",
+            types:        d.types || [],
+            source:       "tcgdex",
+          };
+        }
+      }
+    }
+
+    // Strategy 2: search by name in the set
+    if (setCode) {
+      const r = await fetch(
+        `https://api.tcgdex.net/v2/${langCode}/cards?name=${encodeURIComponent(name)}&set.id=${setCode}&pagination:limit=5`
+      );
+      if (r.ok) {
+        const cards = await r.json();
+        const arr = Array.isArray(cards) ? cards : [];
+        if (arr.length) {
+          const card = arr[0];
+          const detail = await fetch(`https://api.tcgdex.net/v2/${langCode}/cards/${card.id}`);
+          if (detail.ok) {
+            const d = await detail.json();
+            if (d?.image) return {
+              officialName: d.name || name,
+              rarity:       d.rarity || null,
+              set:          setCode,
+              number:       num || d.localId,
+              image:        d.image + "/low.webp",
+              imageLarge:   d.image + "/high.webp",
+              types:        d.types || [],
+              source:       "tcgdex",
+            };
+          }
+        }
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
+async function enrichCard(name, setCode, cardNumber, language) {
   try {
     const cleanName = name.replace(/['"]/g, "").trim();
     const num = cardNumber && cardNumber !== "?" ? cardNumber.split("/")[0].replace(/^0+/, "") : null;
-    const enSet = JP_TO_EN_SET[setCode] || setCode;
+    const langCode = LANG_TO_TCGDEX[language];
 
+    // For non-English cards: try TCGdex first (has native JP/ES/FR images)
+    if (langCode && langCode !== "en") {
+      const tcgResult = await enrichCardTCGdex(cleanName, setCode, num, langCode);
+      if (tcgResult) return tcgResult;
+    }
+
+    // For English cards or TCGdex fallback: use pokemontcg.io
+    const enSet = JP_TO_EN_SET[setCode] || setCode;
     let cards = [];
 
-    // For Japanese cards: search by name + English set (ignore number — numbering differs JP vs EN)
     if (enSet && enSet !== "?") {
       const r = await fetch(
         `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}" set.id:"${enSet}"`)}&pageSize=8&select=id,name,set,rarity,images,types,number&orderBy=number`,
@@ -123,7 +189,6 @@ async function enrichCard(name, setCode, cardNumber) {
       if (r.ok) { const d = await r.json(); cards = d.data || []; }
     }
 
-    // Fallback: if set not found, try name + series prefix (sv = Scarlet & Violet era)
     if (!cards.length && setCode?.startsWith("sv")) {
       const r = await fetch(
         `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}" set.series:"Scarlet & Violet"`)}&pageSize=8&select=id,name,set,rarity,images,types,number&orderBy=-set.releaseDate`,
@@ -132,7 +197,6 @@ async function enrichCard(name, setCode, cardNumber) {
       if (r.ok) { const d = await r.json(); cards = d.data || []; }
     }
 
-    // Last resort: name only, most recent first
     if (!cards.length) {
       const r = await fetch(
         `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}"`)}&pageSize=10&select=id,name,set,rarity,images,types,number&orderBy=-set.releaseDate`,
@@ -151,11 +215,12 @@ async function enrichCard(name, setCode, cardNumber) {
     return {
       officialName: m.name,
       rarity:       m.rarity,
-      set:          setCode || m.set?.id || "?",  // keep original JP code for display
-      number:       num || m.number,              // keep original JP number
+      set:          setCode || m.set?.id || "?",
+      number:       num || m.number,
       image:        m.images?.small || null,
       imageLarge:   m.images?.large || null,
       types:        m.types || [],
+      source:       "pokemontcgio",
     };
   } catch { return null; }
 }
@@ -410,7 +475,7 @@ function ScanTab({inv, saveInv, showToast}) {
     for (let i=0; i<identified.length; i++) {
       setProgress({current:i+1, total:identified.length});
       const base = identified[i];
-      const api  = await enrichCard(base.name, base.set, base.number);
+      const api  = await enrichCard(base.name, base.set, base.number, base.language);
       enriched.push({...base, id:uid(), rarity:api?.rarity||base.rarity||"Unknown", officialName:api?.officialName||base.name, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
     }
     setScanned(enriched); setPhase("done");
@@ -533,12 +598,15 @@ function ScanTab({inv, saveInv, showToast}) {
                               <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{card.condition}</span>
                             </div>
                           </div>
-                          <div style={{marginTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                             <div>
                               <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}</div>
                               <div style={{fontSize:9,color:"#475569"}}>precio estimado CLP</div>
                             </div>
-                            {card.enriched&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>✓ apitcg</span>}
+                            <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                              {card.enriched&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>✓ apitcg</span>}
+                              {card.source&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{card.source==="tcgdex"?"🖼️ "+card.language:"🖼️ EN"}</span>}
+                            </div>
                           </div>
                         </div>
                       </div>
