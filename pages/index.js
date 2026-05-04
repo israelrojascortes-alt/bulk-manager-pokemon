@@ -98,35 +98,44 @@ async function identifyCards(base64, mimeType) {
   return JSON.parse(t.replace(/```json|```/g,"").trim());
 }
 
+// Japanese set code → English set code mapping for pokemontcg.io
+const JP_TO_EN_SET = {
+  "sv1S":"sv1","sv1V":"sv1","sv1a":"svp","sv2":"sv2","sv2a":"sv3pt5","sv2b":"sv2",
+  "sv3":"sv3","sv3a":"sv3pt5","sv4":"sv4","sv4a":"sv4pt5","sv4b":"sv4",
+  "sv5":"sv5","sv5a":"sv6","sv5b":"sv5","sv6":"sv6","sv6a":"sv7",
+  "sv7":"sv7","sv7a":"sv8","sv8":"sv8","sv8a":"sv8pt5","sv8b":"sv9","sv9":"sv9",
+};
+
 async function enrichCard(name, setCode, cardNumber) {
   try {
     const cleanName = name.replace(/['"]/g, "").trim();
     const num = cardNumber && cardNumber !== "?" ? cardNumber.split("/")[0].replace(/^0+/, "") : null;
+    const enSet = JP_TO_EN_SET[setCode] || setCode;
 
     let cards = [];
 
-    // Strategy 1: exact match by set.id + number (most precise)
-    if (setCode && setCode !== "?" && num) {
+    // Strategy 1: English set.id + number — most precise
+    if (enSet && enSet !== "?" && num) {
       const r = await fetch(
-        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`set.id:"${setCode}" number:"${num}"`)}&pageSize=4&select=id,name,set,rarity,images,types,number`,
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`set.id:"${enSet}" number:"${num}"`)}&pageSize=4&select=id,name,set,rarity,images,types,number`,
         { headers: { "Accept": "application/json" } }
       );
       if (r.ok) { const d = await r.json(); cards = d.data || []; }
     }
 
-    // Strategy 2: name + set.id
-    if (!cards.length && setCode && setCode !== "?") {
+    // Strategy 2: name + English set.id
+    if (!cards.length && enSet && enSet !== "?") {
       const r = await fetch(
-        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}" set.id:"${setCode}"`)}&pageSize=4&select=id,name,set,rarity,images,types,number`,
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}" set.id:"${enSet}"`)}&pageSize=4&select=id,name,set,rarity,images,types,number`,
         { headers: { "Accept": "application/json" } }
       );
       if (r.ok) { const d = await r.json(); cards = d.data || []; }
     }
 
-    // Strategy 3: name only
+    // Strategy 3: name only, most recent first
     if (!cards.length) {
       const r = await fetch(
-        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}"`)}&pageSize=8&select=id,name,set,rarity,images,types,number`,
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}"`)}&pageSize=10&select=id,name,set,rarity,images,types,number&orderBy=-set.releaseDate`,
         { headers: { "Accept": "application/json" } }
       );
       if (r.ok) { const d = await r.json(); cards = d.data || []; }
@@ -142,9 +151,9 @@ async function enrichCard(name, setCode, cardNumber) {
     return {
       officialName: m.name,
       rarity:       m.rarity,
-      set:          m.set?.id || setCode || "?",
-      number:       m.number,
-      image:        m.images?.small || m.images?.large || null,
+      set:          setCode || m.set?.id || "?",  // keep original JP code for display
+      number:       num || m.number,
+      image:        m.images?.small || null,
       imageLarge:   m.images?.large || null,
       types:        m.types || [],
     };
