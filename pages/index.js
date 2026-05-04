@@ -75,7 +75,7 @@ Return ONLY valid JSON: {"cards":[{"name":"...","set":"...","number":"...","rari
 If no cards, return {"cards":[]}.`,
     messages: [{role:"user",content:[
       {type:"image",source:{type:"base64",media_type:mimeType,data:base64}},
-      {type:"text",text:"Identify all Pokémon cards."}
+      {type:"text",text:"Identify ALL Pokémon cards visible in this image. There may be multiple cards. List each one separately."}
     ]}]
   });
   const t = d.content?.find(b=>b.type==="text")?.text || "{}";
