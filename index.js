@@ -166,6 +166,28 @@ function scrydexCardUrl(name, setCode, number) {
   return `https://scrydex.com/pokemon/cards/${slug}/${setCode.toLowerCase()}_ja-${numClean}`;
 }
 
+// Extract best price from TCGdex pricing field
+function extractTCGdexPrice(pricing) {
+  if (!pricing) return null;
+  const USD_TO_CLP = 950;
+  const EUR_TO_CLP = 1050;
+
+  // Try TCGPlayer first (USD)
+  const tcg = pricing.tcgplayer;
+  if (tcg?.normal?.market || tcg?.holofoil?.market || tcg?.normal?.mid) {
+    const usd = tcg.holofoil?.market || tcg.normal?.market || tcg.holofoil?.mid || tcg.normal?.mid;
+    if (usd) return { usd, clp: Math.round(usd * USD_TO_CLP), src:"tcgplayer", conf:"h" };
+  }
+
+  // Fallback to Cardmarket (EUR)
+  const cm = pricing.cardmarket;
+  if (cm?.averageSellPrice || cm?.avg1 || cm?.avg7) {
+    const eur = cm.averageSellPrice || cm.avg7 || cm.avg1;
+    if (eur) return { eur, clp: Math.round(eur * EUR_TO_CLP), src:"cardmarket", conf:"h" };
+  }
+  return null;
+}
+
 // TCGdex: search by set + number (exact match for JP/ES/FR etc.)
 async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
   try {
@@ -210,6 +232,7 @@ async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
       // - English lookup succeeded and name matches, OR
       // - English lookup failed (JP-only set) — Claude's translation is trusted
       if (nameMatches) {
+        const tcgPrice = extractTCGdexPrice(d.pricing);
         return {
           officialName: englishNameFinal,
           nativeName:   d.name || null,
@@ -220,6 +243,7 @@ async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
           imageLarge:   d.image + "/high.webp",
           types:        d.types || [],
           source:       "tcgdex",
+          tcgPrice,     // real price if available
         };
       }
     }
@@ -363,8 +387,13 @@ async function enrichCard(name, setCode, cardNumber, language) {
 async function fetchRealPrice(card) {
   try {
     const cleanName = (card.officialName||card.name||"").replace(/['"]/g,"").trim();
-    const enSet = JP_TO_EN_SET[card.set] || card.set;
     const USD_TO_CLP = 950;
+
+    // If enrichCard already got a real price from TCGdex, use it
+    if (card.tcgPrice) return card.tcgPrice;
+
+    // pokemontcg.io TCGPlayer prices for EN cards
+    const enSet = JP_TO_EN_SET[card.set] || card.set;
     let cards = [];
 
     if (enSet && enSet !== "?") {
@@ -381,19 +410,18 @@ async function fetchRealPrice(card) {
       );
       if (r.ok) { const d = await r.json(); cards = d.data || []; }
     }
+    if (!cards.length) return null;
 
-    if (cards.length) {
-      const nl = cleanName.toLowerCase();
-      const m = cards.find(c=>c.name?.toLowerCase()===nl)
-        || cards.find(c=>c.name?.toLowerCase().includes(nl.split(" ")[0].toLowerCase()))
-        || cards[0];
-      const prices = m?.tcgplayer?.prices;
-      if (prices) {
-        const tier = prices.holofoil || prices.normal || prices.reverseHolofoil || prices["1stEditionHolofoil"] || null;
-        if (tier?.market || tier?.mid) {
-          const usd = tier.market || tier.mid;
-          return { usd, clp: Math.round(usd * USD_TO_CLP), src:"tcgplayer", conf:"h" };
-        }
+    const nl = cleanName.toLowerCase();
+    const m = cards.find(c=>c.name?.toLowerCase()===nl)
+      || cards.find(c=>c.name?.toLowerCase().includes(nl.split(" ")[0].toLowerCase()))
+      || cards[0];
+    const prices = m?.tcgplayer?.prices;
+    if (prices) {
+      const tier = prices.holofoil || prices.normal || prices.reverseHolofoil || prices["1stEditionHolofoil"] || null;
+      if (tier?.market || tier?.mid) {
+        const usd = tier.market || tier.mid;
+        return { usd, clp: Math.round(usd * USD_TO_CLP), src:"tcgplayer", conf:"h" };
       }
     }
     return null;
@@ -634,8 +662,51 @@ function ScanTab({inv, saveInv, showToast}) {
   const [saving, setSaving]     = useState(false);
   const [saved, setSaved]       = useState(false);
   const [showListing, setShowListing] = useState(false);
+
+  // Manual correction state
+  const [editingIdx, setEditingIdx]     = useState(null);
+  const [searchQuery, setSearchQuery]   = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching]       = useState(false);
+
   const cameraRef  = useRef();
   const galleryRef = useRef();
+
+  // Search pokemontcg.io for manual correction
+  const doSearch = async (q) => {
+    if (!q.trim()) { setSearchResults([]); return; }
+    setSearching(true);
+    try {
+      const r = await fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${q.trim()}"`)}&pageSize=12&select=id,name,set,rarity,images,types,number&orderBy=-set.releaseDate`,
+        { headers: { "Accept":"application/json" } }
+      );
+      if (r.ok) { const d = await r.json(); setSearchResults(d.data||[]); }
+      else setSearchResults([]);
+    } catch { setSearchResults([]); }
+    setSearching(false);
+  };
+
+  // Apply manual selection to scanned card
+  const applyCorrection = (result) => {
+    if (editingIdx === null) return;
+    setScanned(prev => prev.map((card, i) => i !== editingIdx ? card : {
+      ...card,
+      officialName: result.name,
+      officialSet:  result.set?.id || card.officialSet,
+      number:       result.number || card.number,
+      rarity:       result.rarity || card.rarity,
+      image:        result.images?.small || card.image,
+      imageLarge:   result.images?.large || card.imageLarge,
+      imageScrydex: null,
+      source:       "manual",
+      enriched:     true,
+    }));
+    setEditingIdx(null);
+    setSearchQuery("");
+    setSearchResults([]);
+    showToast("Carta corregida ✓");
+  };
 
   const loadFile = useCallback(file => {
     if (!file?.type.startsWith("image/")) return;
@@ -681,7 +752,7 @@ function ScanTab({inv, saveInv, showToast}) {
       const isOverNumbered = numParts.length===2 && parseInt(numParts[0])>parseInt(numParts[1]);
       const detectedRarity = isOverNumbered ? "SAR" : (api?.rarity||base.rarity||"Unknown");
 
-      enriched.push({...base, id:uid(), rarity:detectedRarity, officialName:api?.officialName||base.name, nativeName:api?.nativeName||null, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], source:api?.source||null, addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
+      enriched.push({...base, id:uid(), rarity:detectedRarity, officialName:api?.officialName||base.name, nativeName:api?.nativeName||null, nameEs:api?.nameEs||null, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, imageScrydex:api?.imageScrydex||null, scrydexUrl:api?.scrydexUrl||null, types:api?.types||[], source:api?.source||null, tcgPrice:api?.tcgPrice||null, addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
     }
     setScanned(enriched); setPhase("done");
   };
@@ -807,24 +878,49 @@ function ScanTab({inv, saveInv, showToast}) {
                             </div>
                           </div>
                           <div style={{marginTop:8}}>
-                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
-                              <div>
-                                <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}</div>
-                                <div style={{fontSize:9,color:"#475569"}}>precio estimado CLP</div>
+                            {card.tcgPrice ? (
+                              // Real price from TCGdex
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+                                <div>
+                                  <div style={{fontFamily:"monospace",fontSize:18,color:"#4ade80",fontWeight:700}}>{fclp(card.tcgPrice.clp)}</div>
+                                  <div style={{fontSize:9,color:"#475569"}}>
+                                    {card.tcgPrice.src==="tcgplayer"?`TCGPlayer US$${card.tcgPrice.usd?.toFixed(2)}`:card.tcgPrice.src==="cardmarket"?`Cardmarket €${card.tcgPrice.eur?.toFixed(2)}`:"precio real"}
+                                  </div>
+                                </div>
+                                <span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(74,222,128,.15)",color:"#4ade80",fontWeight:600}}>✓ precio real</span>
                               </div>
-                              <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+                            ) : card.language==="Japanese" && card.scrydexUrl ? (
+                              // JP card without TCGdex price — show Scrydex link
+                              <a href={card.scrydexUrl} target="_blank" rel="noreferrer"
+                                style={{display:"flex",alignItems:"center",gap:6,padding:"8px 12px",background:"linear-gradient(135deg,rgba(250,204,21,.15),rgba(245,158,11,.1))",border:"1px solid rgba(250,204,21,.3)",borderRadius:10,textDecoration:"none"}}>
+                                <span style={{fontSize:14}}>💰</span>
+                                <div>
+                                  <div style={{fontSize:12,color:"#facc15",fontWeight:700}}>Ver precio real en Scrydex</div>
+                                  <div style={{fontSize:10,color:"#64748b"}}>Actualizado diariamente</div>
+                                </div>
+                                <span style={{color:"#facc15",fontSize:14,marginLeft:"auto"}}>›</span>
+                              </a>
+                            ) : (
+                              // Estimated price range
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+                                <div>
+                                  <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}–{fclp(r.max)}</div>
+                                  <div style={{fontSize:9,color:"#475569"}}>rango estimado CLP</div>
+                                </div>
+                              </div>
+                            )}
+                            {/* Source badge + Correct button */}
+                            <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"space-between",alignItems:"center"}}>
+                              <div style={{display:"flex",gap:4}}>
                                 {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
                                 {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
+                                {card.source==="manual"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(96,165,250,.12)",color:"#60a5fa"}}>✏️ Manual</span>}
                               </div>
+                              <button onClick={()=>{setEditingIdx(i);setSearchQuery(card.officialName||card.name||"");setSearchResults([]);doSearch(card.officialName||card.name||"");}}
+                                style={{fontSize:10,padding:"3px 10px",borderRadius:6,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",cursor:"pointer"}}>
+                                ✏️ Corregir
+                              </button>
                             </div>
-                            {/* Scrydex price link for JP cards */}
-                            {card.scrydexUrl&&(
-                              <a href={card.scrydexUrl} target="_blank" rel="noreferrer"
-                                style={{display:"flex",alignItems:"center",gap:5,marginTop:8,padding:"6px 10px",background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.2)",borderRadius:8,textDecoration:"none"}}>
-                                <span style={{fontSize:11}}>💰</span>
-                                <span style={{fontSize:11,color:"#facc15",fontWeight:600}}>Ver precio real en Scrydex →</span>
-                              </a>
-                            )}
                           </div>
                         </div>
                       </div>
@@ -853,6 +949,70 @@ function ScanTab({inv, saveInv, showToast}) {
 
       <Sheet open={showListing} onClose={()=>setShowListing(false)} title="LISTING" height="65vh">
         {scanned?.length>0&&(()=>{const byR={};scanned.forEach(c=>{const l=rd(c.rarity).label;byR[l]=(byR[l]||0)+1;});const text=`Lote ${scanned.length} cartas Pokémon bulk\n\nComposición:\n${Object.entries(byR).map(([r,n])=>`• ${n}x ${r}`).join("\n")}\n\nCartas revisadas. Envío a todo Chile.\n💰 ${fclp(totalMin)}–${fclp(totalMax)} CLP\n📍 Ref: tcgmatch.cl`;return(<><div style={{background:"rgba(0,0,0,.4)",border:"1px solid rgba(250,204,21,.15)",borderRadius:12,padding:14,marginBottom:14}}><pre style={{fontSize:13,color:"#94a3b8",whiteSpace:"pre-wrap",lineHeight:1.7}}>{text}</pre></div><Btn onClick={()=>{navigator.clipboard.writeText(text);showToast("Copiado ✓");setShowListing(false);}}>📋 Copiar</Btn></>);})()} 
+      </Sheet>
+
+      {/* Manual correction sheet */}
+      <Sheet open={editingIdx!==null} onClose={()=>{setEditingIdx(null);setSearchQuery("");setSearchResults([]);}} title="CORREGIR CARTA" height="90vh">
+        <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>
+          Busca la carta correcta y selecciónala
+        </div>
+        {/* Search input */}
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          <input
+            value={searchQuery}
+            onChange={e=>setSearchQuery(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&doSearch(searchQuery)}
+            placeholder="Ej: Togekiss, Alakazam ex..."
+            style={{...iStyle, flex:1}}
+            autoFocus
+          />
+          <button onClick={()=>doSearch(searchQuery)} style={{background:"linear-gradient(135deg,#facc15,#f59e0b)",color:"#090d12",border:"none",borderRadius:10,padding:"0 16px",fontSize:14,fontWeight:700,cursor:"pointer",flexShrink:0}}>
+            {searching?"...":"🔍"}
+          </button>
+        </div>
+
+        {/* Current card */}
+        {editingIdx!==null && scanned?.[editingIdx] && (
+          <div style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:12,padding:"10px 12px",marginBottom:14,display:"flex",gap:10,alignItems:"center"}}>
+            <span style={{fontSize:10,color:"#475569"}}>Actual:</span>
+            {(scanned[editingIdx].imageScrydex||scanned[editingIdx].imageLarge||scanned[editingIdx].image)&&(
+              <img src={scanned[editingIdx].imageScrydex||scanned[editingIdx].imageLarge||scanned[editingIdx].image} alt="" style={{width:30,borderRadius:4}}/>
+            )}
+            <div>
+              <div style={{fontSize:13,color:"#94a3b8",fontWeight:600}}>{scanned[editingIdx].officialName||scanned[editingIdx].name}</div>
+              <div style={{fontSize:10,color:"#475569",fontFamily:"monospace"}}>{scanned[editingIdx].officialSet||scanned[editingIdx].set} · {scanned[editingIdx].number}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Results */}
+        {searching && <div style={{textAlign:"center",padding:20,color:"#475569"}}>Buscando...</div>}
+        {!searching && searchResults.length===0 && searchQuery && (
+          <div style={{textAlign:"center",padding:20,color:"#475569"}}>Sin resultados para "{searchQuery}"</div>
+        )}
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {searchResults.map(result=>{
+            const r = rd(result.rarity);
+            return (
+              <button key={result.id} onClick={()=>applyCorrection(result)} style={{display:"flex",gap:10,padding:"10px 12px",background:"rgba(13,17,23,.95)",border:`1px solid ${r.color}22`,borderRadius:12,cursor:"pointer",textAlign:"left",alignItems:"center",width:"100%"}}>
+                {result.images?.small ? (
+                  <img src={result.images.small} alt={result.name} style={{width:42,borderRadius:5,flexShrink:0}}/>
+                ) : (
+                  <div style={{width:42,height:58,borderRadius:5,background:`${r.color}15`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:18}}>🃏</span></div>
+                )}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#e2e8f0"}}>{result.name}</div>
+                  <div style={{fontSize:11,color:"#475569",fontFamily:"monospace",marginTop:1}}>{result.set?.name} · #{result.number}</div>
+                  <div style={{display:"flex",gap:4,marginTop:4}}>
+                    <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:`${r.color}20`,color:r.color}}>{r.label}</span>
+                    <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{result.set?.id}</span>
+                  </div>
+                </div>
+                <span style={{color:"#4ade80",fontSize:18,flexShrink:0}}>✓</span>
+              </button>
+            );
+          })}
+        </div>
       </Sheet>
     </div>
   );
@@ -919,10 +1079,24 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:12,color:"#475569"}}>Mejor precio</span><span style={{fontSize:10,padding:"2px 7px",borderRadius:4,background:`${src.color}22`,color:src.color}}>{src.label}</span></div>
             <div style={{fontFamily:"monospace",fontSize:24,color:src.color,fontWeight:700}}>{fclp(best.value)}</div>
           </div>
-          <div style={{display:"flex",gap:8,marginBottom:14}}>
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
             <button onClick={()=>{setShowPrice(true);setManualPrice(prices[detail.id]?.tcgmatch_clp||"");}} style={{flex:1,background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.2)",color:"#facc15",borderRadius:12,padding:"11px",fontSize:13,cursor:"pointer"}}>✏️ tcgmatch</button>
             <button onClick={()=>fetchP(detail)} disabled={fetchingP} style={{flex:1,background:"rgba(96,165,250,.08)",border:"1px solid rgba(96,165,250,.2)",color:"#60a5fa",borderRadius:12,padding:"11px",fontSize:13,cursor:"pointer"}}>{fetchingP?"...":"⚡ TCGPlayer"}</button>
           </div>
+          {detail.language==="Japanese"&&(()=>{
+            const sUrl = detail.scrydexUrl || scrydexCardUrl(detail.officialName||detail.name, detail.set, detail.number);
+            return sUrl ? (
+              <a href={sUrl} target="_blank" rel="noreferrer"
+                style={{display:"flex",alignItems:"center",gap:8,padding:"11px 14px",background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.25)",borderRadius:12,textDecoration:"none",marginBottom:14}}>
+                <span style={{fontSize:16}}>💰</span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,color:"#facc15",fontWeight:700}}>Ver precio en Scrydex</div>
+                  <div style={{fontSize:10,color:"#64748b"}}>Precio JP real · actualizado diario</div>
+                </div>
+                <span style={{color:"#facc15",fontSize:16}}>›</span>
+              </a>
+            ) : null;
+          })()}
           <div style={{fontSize:12,color:"#475569",marginBottom:8}}>Estado</div>
           <div style={{display:"flex",gap:8,marginBottom:14}}>{Object.entries(INV_STATUS).map(([k,v])=><button key={k} onClick={()=>chgSt(detail.id,k)} style={{flex:1,padding:"10px 4px",borderRadius:10,cursor:"pointer",border:"none",fontSize:11,fontWeight:600,background:detail.status===k?`${v.color}25`:"rgba(255,255,255,.05)",color:detail.status===k?v.color:"#64748b",outline:detail.status===k?`1.5px solid ${v.color}50`:"none"}}>{v.label}</button>)}</div>
           <Btn variant="danger" onClick={()=>delC(detail.id)}>🗑 Eliminar</Btn>
