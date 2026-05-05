@@ -12,6 +12,7 @@ const RARITY = {
   "Rare Holo VMAX": { label:"VMAX",        color:"#e879f9", min:4000,  max:15000 },
   "Rare Ultra":     { label:"Ultra Rare",  color:"#60a5fa", min:5000,  max:20000 },
   "Rare Secret":    { label:"Secret Rare", color:"#f43f5e", min:10000, max:50000 },
+  "SAR":            { label:"SAR",         color:"#f43f5e", min:80000, max:300000 },
   "Unknown":        { label:"?",           color:"#475569", min:100,   max:300   },
 };
 
@@ -151,6 +152,20 @@ const JP_TO_EN_SET = {
   "sv7":"sv7","sv7a":"sv8","sv8":"sv8","sv8a":"sv8pt5","sv8b":"sv9","sv9":"sv9",
 };
 
+// Scrydex CDN image URL for Japanese cards (public CDN, no API key needed)
+function scrydexImgUrl(setCode, number) {
+  if (!setCode || !number) return null;
+  const numPadded = String(number).split("/")[0].replace(/^0+/,"").padStart(3,"0");
+  return `https://images.scrydex.com/pokemon/${setCode.toLowerCase()}_ja-${numPadded}/medium`;
+}
+
+function scrydexCardUrl(name, setCode, number) {
+  if (!name || !setCode || !number) return null;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+  const numClean = String(number).split("/")[0].replace(/^0+/,"");
+  return `https://scrydex.com/pokemon/cards/${slug}/${setCode.toLowerCase()}_ja-${numClean}`;
+}
+
 // TCGdex: search by set + number (exact match for JP/ES/FR etc.)
 async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
   try {
@@ -218,11 +233,48 @@ async function enrichCard(name, setCode, cardNumber, language) {
     const num = cardNumber && cardNumber !== "?" ? cardNumber.split("/")[0].replace(/^0+/, "") : null;
     const langCode = LANG_TO_TCGDEX[language];
 
-    // For non-English cards: try TCGdex first (has native JP/ES/FR images)
+    // Special handling for M4 (Pokemon Card Game Classic) — TCGdex uses code "PCLC"
+    if ((setCode === "M4" || setCode === "m4") && num) {
+      const scrydexImg = scrydexImgUrl(setCode, num);
+      const scrydexUrl = scrydexCardUrl(cleanName, setCode, num);
+      try {
+        for (const n of [num, num.padStart(3,"0")]) {
+          const r = await fetch(`https://api.tcgdex.net/v2/ja/sets/PCLC/${n}`);
+          if (r.ok) {
+            const d = await r.json();
+            if (d?.image) return {
+              officialName: cleanName,
+              nativeName:   d.name||null,
+              rarity:       "SAR",
+              set:          "M4",
+              number:       num,
+              image:        scrydexImg || d.image+"/low.webp",
+              imageLarge:   scrydexImg || d.image+"/high.webp",
+              imageScrydex: scrydexImg,
+              scrydexUrl,
+              types:        [],
+              source:       scrydexImg ? "scrydex" : "tcgdex",
+            };
+          }
+        }
+      } catch {}
+      // Even if TCGdex fails, return with Scrydex image
+      if (scrydexImg) return {
+        officialName: cleanName, nativeName: null, rarity: "SAR",
+        set: "M4", number: num, image: scrydexImg, imageLarge: scrydexImg,
+        imageScrydex: scrydexImg, scrydexUrl, types: [], source: "scrydex",
+      };
+    }
+
+    // For non-English cards: try TCGdex first, Scrydex CDN as image override
     if (langCode && langCode !== "en") {
       const tcgResult = await enrichCardTCGdex(cleanName, setCode, num, langCode);
+
+      // Try Scrydex CDN image (public, no auth needed)
+      const scrydexImg = scrydexImgUrl(setCode, num);
+      const scrydexUrl = scrydexCardUrl(cleanName, setCode, num);
+
       if (tcgResult) {
-        // Also fetch Spanish name if card is Japanese
         let nameEs = null;
         if (language === "Japanese") {
           try {
@@ -233,7 +285,29 @@ async function enrichCard(name, setCode, cardNumber, language) {
             }
           } catch {}
         }
-        return { ...tcgResult, nameEs };
+        return {
+          ...tcgResult, nameEs,
+          // Prefer Scrydex CDN image if available (better quality)
+          imageScrydex: scrydexImg,
+          scrydexUrl,
+        };
+      }
+
+      // No TCGdex result but we can still provide Scrydex image + link
+      if (scrydexImg) {
+        return {
+          officialName: cleanName,
+          nativeName:   null,
+          rarity:       null,
+          set:          setCode,
+          number:       num,
+          image:        scrydexImg,
+          imageLarge:   scrydexImg,
+          imageScrydex: scrydexImg,
+          scrydexUrl,
+          types:        [],
+          source:       "scrydex",
+        };
       }
     }
 
@@ -286,36 +360,82 @@ async function enrichCard(name, setCode, cardNumber, language) {
   } catch { return null; }
 }
 
-async function fetchPricesWithClaude(cards) {
-  const list = cards.map((c,i)=>`${i+1}. ${c.name}|${c.set||"?"}|${c.rarity||"?"}|${c.language||"Spanish"}`).join("\n");
-  const d = await callClaude({
-    max_tokens: 800,
-    system: `Pokémon TCG pricing expert. Return ONLY JSON array, no markdown.
-Format: [{"i":1,"usd":X.XX,"clp":XXXXX,"src":"tcgplayer|estimate","conf":"h|m|l"}]
-TCGPlayer/CardMarket prices, 950 CLP per USD.
+async function fetchRealPrice(card) {
+  try {
+    const cleanName = (card.officialName||card.name||"").replace(/['"]/g,"").trim();
+    const enSet = JP_TO_EN_SET[card.set] || card.set;
+    const USD_TO_CLP = 950;
+    let cards = [];
 
-Rarity price guide (USD):
-- Common: $0.10 | Uncommon: $0.25 | Rare: $1.00
-- Rare Holo: $4.00 | EX/GX/V: $8.00 | VMAX/VSTAR: $12.00
-- Ultra Rare/Full Art: $20.00 | Secret Rare/ACE SPEC: $40.00
-- Illustration Rare (IR): $15-80 | Special Illustration Rare (SAR/SIR): $80-300
+    if (enSet && enSet !== "?") {
+      const r = await fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}" set.id:"${enSet}"`)}&pageSize=8&select=id,name,tcgplayer,rarity&orderBy=number`,
+        { headers: { "Accept": "application/json" } }
+      );
+      if (r.ok) { const d = await r.json(); cards = d.data || []; }
+    }
+    if (!cards.length) {
+      const r = await fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${cleanName}"`)}&pageSize=8&select=id,name,tcgplayer,rarity&orderBy=-set.releaseDate`,
+        { headers: { "Accept": "application/json" } }
+      );
+      if (r.ok) { const d = await r.json(); cards = d.data || []; }
+    }
 
-Popular Pokémon PREMIUM (multiply base price):
-- Charizard: 5-20x | Mega Greninja/Greninja: 3-10x
-- Pikachu/Eevee: 3-8x | Mewtwo/Mew: 3-6x
-- Gengar/Umbreon/Espeon: 2-5x | Gardevoir: 2-4x
-
-Special cases (known high-value cards):
-- Mega Greninja ex SAR (M4 114/083): ~$250-280 USD
-- Charizard ex SAR: ~$100-200 USD
-
-Japanese exclusive sets (M4, sv8a, sv7a etc.): price same or +10% vs English.
-Condition: Mint=full, NM=90%, Good=60%, Played=30%.`,
-    messages: [{role:"user",content:`Price these cards:\n${list}`}]
-  });
-  const t = d.content?.find(b=>b.type==="text")?.text || "[]";
-  try { return JSON.parse(t.replace(/```(?:json)?|```/g,"").trim()); } catch { return []; }
+    if (cards.length) {
+      const nl = cleanName.toLowerCase();
+      const m = cards.find(c=>c.name?.toLowerCase()===nl)
+        || cards.find(c=>c.name?.toLowerCase().includes(nl.split(" ")[0].toLowerCase()))
+        || cards[0];
+      const prices = m?.tcgplayer?.prices;
+      if (prices) {
+        const tier = prices.holofoil || prices.normal || prices.reverseHolofoil || prices["1stEditionHolofoil"] || null;
+        if (tier?.market || tier?.mid) {
+          const usd = tier.market || tier.mid;
+          return { usd, clp: Math.round(usd * USD_TO_CLP), src:"tcgplayer", conf:"h" };
+        }
+      }
+    }
+    return null;
+  } catch { return null; }
 }
+
+async function fetchPricesWithClaude(cards) {
+  // Try real TCGPlayer prices first
+  const realPrices = await Promise.all(cards.map(c => fetchRealPrice(c)));
+
+  // Claude fallback for cards without real price
+  const needsEstimate = cards.map((c,i) => realPrices[i] ? null : c).filter(Boolean);
+  let estimates = [];
+
+  if (needsEstimate.length) {
+    const list = needsEstimate.map((c,i)=>
+      `${i+1}. ${c.officialName||c.name}|${c.set||"?"}|${c.rarity||"?"}|${c.language||"?"}`
+    ).join("\n");
+    try {
+      const d = await callClaude({
+        max_tokens: 600,
+        system: `Pokemon TCG pricing expert. Return ONLY JSON array, no markdown.
+Format: [{"i":1,"usd":X.XX,"clp":XXXXX,"conf":"m|l"}]
+TCGPlayer prices, 950 CLP per USD.
+Rarity: Common $0.10, Uncommon $0.25, Rare $1, Holo $4, EX/V $8, VMAX $12, Ultra $20, Secret $40, SAR/SIR $80-300.
+Mega Greninja ex SAR(M4 114/083): ~$260. Charizard SAR: ~$150. Japanese exclusives +10%.`,
+        messages:[{role:"user",content:`Estimate prices:\n${list}`}]
+      });
+      const t = d.content?.find(b=>b.type==="text")?.text||"[]";
+      const parsed = robustJsonParse(t);
+      estimates = Array.isArray(parsed)?parsed:(parsed.cards||[]);
+    } catch {}
+  }
+
+  let estIdx = 0;
+  return cards.map((_,i) => {
+    if (realPrices[i]) return realPrices[i];
+    const est = estimates[estIdx++];
+    return est ? { usd:est.usd, clp:est.clp, src:"estimate", conf:est.conf||"l" } : null;
+  });
+}
+
 
 // ─── Local storage helpers ────────────────────────────────────────
 const KEYS = { inv:"bulk-inv", lots:"bulk-lots", sales:"bulk-sales", prices:"bulk-prices" };
@@ -555,7 +675,13 @@ function ScanTab({inv, saveInv, showToast}) {
       setProgress({current:i+1, total:identified.length});
       const base = identified[i];
       const api  = await enrichCard(base.name, base.set, base.number, base.language);
-      enriched.push({...base, id:uid(), rarity:api?.rarity||base.rarity||"Unknown", officialName:api?.officialName||base.name, nativeName:api?.nativeName||null, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], source:api?.source||null, addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
+      // Auto-detect SAR: number > total (e.g. 114/083 = over-numbered = special art)
+      const rawNum = base.number||"";
+      const numParts = rawNum.split("/");
+      const isOverNumbered = numParts.length===2 && parseInt(numParts[0])>parseInt(numParts[1]);
+      const detectedRarity = isOverNumbered ? "SAR" : (api?.rarity||base.rarity||"Unknown");
+
+      enriched.push({...base, id:uid(), rarity:detectedRarity, officialName:api?.officialName||base.name, nativeName:api?.nativeName||null, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], source:api?.source||null, addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
     }
     setScanned(enriched); setPhase("done");
   };
@@ -643,22 +769,23 @@ function ScanTab({inv, saveInv, showToast}) {
                   const r=rd(card.rarity);
                   return (
                     <div key={i} style={{background:"rgba(13,17,23,.95)",border:`1px solid ${r.color}33`,borderRadius:16,overflow:"hidden"}}>
-                      {/* Card image — full width referential */}
                       <div style={{display:"flex",gap:0}}>
-                        {/* Image column */}
+                        {/* Image column — Scrydex > TCGdex > pokemontcg.io */}
                         <div style={{width:100,flexShrink:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",minHeight:140,padding:6}}>
-                          {(card.imageLarge||card.image) ? (
+                          {(card.imageScrydex||card.imageLarge||card.image) ? (
                             <img
-                              src={card.imageLarge||card.image}
+                              src={card.imageScrydex||card.imageLarge||card.image}
                               alt={card.officialName||card.name}
                               style={{width:88,borderRadius:8,display:"block",boxShadow:"0 4px 12px rgba(0,0,0,.5)"}}
                               onError={e=>{
-                                if (card.image && e.target.src !== card.image) { e.target.src = card.image; }
+                                const fallbacks = [card.imageLarge, card.image].filter(Boolean);
+                                const cur = fallbacks.findIndex(u=>u===e.target.src);
+                                if (cur < fallbacks.length-1) { e.target.src = fallbacks[cur+1]; }
                                 else { e.target.style.display="none"; e.target.nextSibling.style.display="flex"; }
                               }}
                             />
                           ) : null}
-                          <div style={{display:(card.imageLarge||card.image)?"none":"flex",alignItems:"center",justifyContent:"center",width:88,height:123,borderRadius:8,background:`${r.color}15`,border:`1px solid ${r.color}30`,flexDirection:"column",gap:4}}>
+                          <div style={{display:(card.imageScrydex||card.imageLarge||card.image)?"none":"flex",alignItems:"center",justifyContent:"center",width:88,height:123,borderRadius:8,background:`${r.color}15`,border:`1px solid ${r.color}30`,flexDirection:"column",gap:4}}>
                             <span style={{fontSize:28}}>🃏</span>
                             <span style={{fontSize:9,color:"#475569"}}>Sin imagen</span>
                           </div>
@@ -679,15 +806,25 @@ function ScanTab({inv, saveInv, showToast}) {
                               <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{card.condition}</span>
                             </div>
                           </div>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                            <div>
-                              <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}</div>
-                              <div style={{fontSize:9,color:"#475569"}}>precio estimado CLP</div>
+                          <div style={{marginTop:8}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+                              <div>
+                                <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}</div>
+                                <div style={{fontSize:9,color:"#475569"}}>precio estimado CLP</div>
+                              </div>
+                              <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+                                {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
+                                {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
+                              </div>
                             </div>
-                            <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                              {card.enriched&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>✓ apitcg</span>}
-                              {card.source&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{card.source==="tcgdex"?"🖼️ "+card.language:"🖼️ EN"}</span>}
-                            </div>
+                            {/* Scrydex price link for JP cards */}
+                            {card.scrydexUrl&&(
+                              <a href={card.scrydexUrl} target="_blank" rel="noreferrer"
+                                style={{display:"flex",alignItems:"center",gap:5,marginTop:8,padding:"6px 10px",background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.2)",borderRadius:8,textDecoration:"none"}}>
+                                <span style={{fontSize:11}}>💰</span>
+                                <span style={{fontSize:11,color:"#facc15",fontWeight:600}}>Ver precio real en Scrydex →</span>
+                              </a>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -741,7 +878,7 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
   const addCard=()=>{if(!newCard.name.trim())return;setSaving(true);saveInv([{...newCard,id:uid(),addedAt:today(),status:"disponible",lotId:null,image:""},...inv]);setNewCard({name:"",set:"",number:"",rarity:"Common",language:"Spanish",condition:"Near Mint"});setShowAdd(false);setSaving(false);showToast("Carta agregada ✓");};
   const chgSt=async(id,s)=>{saveInv(inv.map(c=>c.id===id?{...c,status:s}:c));setDetail(p=>p?.id===id?{...p,status:s}:p);showToast("Estado actualizado");};
   const delC=(id)=>{saveInv(inv.filter(c=>c.id!==id));setDetail(null);showToast("Eliminada","warn");};
-  const fetchP=async(card)=>{setFetchingP(true);try{const r=await fetchPricesWithClaude([card]);const p=r[0];if(p?.clp){savePrices({...prices,[card.id]:{source:"tcg",tcg_clp_market:p.clp,tcg_market:p.usd,confidence:p.conf,fetchedAt:today()}});showToast(`${fclp(p.clp)} ✓`);}else showToast("Sin precio","warn");}catch{showToast("Error","warn");}setFetchingP(false);};
+  const fetchP=async(card)=>{setFetchingP(true);try{const r=await fetchPricesWithClaude([card]);const p=r[0];if(p?.clp){savePrices({...prices,[card.id]:{source:p.src==="tcgplayer"?"tcg":"estimated",tcg_clp_market:p.clp,tcg_market:p.usd,confidence:p.conf,fetchedAt:today()}});showToast(`${fclp(p.clp)} ✓ ${p.src==="tcgplayer"?"TCGPlayer":"estimado"}`);}else showToast("Sin precio","warn");}catch{showToast("Error","warn");}setFetchingP(false);};
   const saveM=(id)=>{const v=parseFloat(String(manualPrice).replace(/\D/g,""));if(!v)return;savePrices({...prices,[id]:{...prices[id]||{},tcgmatch_clp:v,source:"tcgmatch",fetchedAt:today()}});setManualPrice("");setShowPrice(false);showToast("Precio guardado ✓");};
 
   return (
