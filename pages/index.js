@@ -166,6 +166,28 @@ function scrydexCardUrl(name, setCode, number) {
   return `https://scrydex.com/pokemon/cards/${slug}/${setCode.toLowerCase()}_ja-${numClean}`;
 }
 
+// Extract best price from TCGdex pricing field
+function extractTCGdexPrice(pricing) {
+  if (!pricing) return null;
+  const USD_TO_CLP = 950;
+  const EUR_TO_CLP = 1050;
+
+  // Try TCGPlayer first (USD)
+  const tcg = pricing.tcgplayer;
+  if (tcg?.normal?.market || tcg?.holofoil?.market || tcg?.normal?.mid) {
+    const usd = tcg.holofoil?.market || tcg.normal?.market || tcg.holofoil?.mid || tcg.normal?.mid;
+    if (usd) return { usd, clp: Math.round(usd * USD_TO_CLP), src:"tcgplayer", conf:"h" };
+  }
+
+  // Fallback to Cardmarket (EUR)
+  const cm = pricing.cardmarket;
+  if (cm?.averageSellPrice || cm?.avg1 || cm?.avg7) {
+    const eur = cm.averageSellPrice || cm.avg7 || cm.avg1;
+    if (eur) return { eur, clp: Math.round(eur * EUR_TO_CLP), src:"cardmarket", conf:"h" };
+  }
+  return null;
+}
+
 // TCGdex: search by set + number (exact match for JP/ES/FR etc.)
 async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
   try {
@@ -210,6 +232,7 @@ async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
       // - English lookup succeeded and name matches, OR
       // - English lookup failed (JP-only set) — Claude's translation is trusted
       if (nameMatches) {
+        const tcgPrice = extractTCGdexPrice(d.pricing);
         return {
           officialName: englishNameFinal,
           nativeName:   d.name || null,
@@ -220,6 +243,7 @@ async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
           imageLarge:   d.image + "/high.webp",
           types:        d.types || [],
           source:       "tcgdex",
+          tcgPrice,     // real price if available
         };
       }
     }
@@ -364,6 +388,11 @@ async function fetchRealPrice(card) {
   try {
     const cleanName = (card.officialName||card.name||"").replace(/['"]/g,"").trim();
     const USD_TO_CLP = 950;
+
+    // If enrichCard already got a real price from TCGdex, use it
+    if (card.tcgPrice) return card.tcgPrice;
+
+    // pokemontcg.io TCGPlayer prices for EN cards
     const enSet = JP_TO_EN_SET[card.set] || card.set;
     let cards = [];
 
@@ -680,7 +709,7 @@ function ScanTab({inv, saveInv, showToast}) {
       const isOverNumbered = numParts.length===2 && parseInt(numParts[0])>parseInt(numParts[1]);
       const detectedRarity = isOverNumbered ? "SAR" : (api?.rarity||base.rarity||"Unknown");
 
-      enriched.push({...base, id:uid(), rarity:detectedRarity, officialName:api?.officialName||base.name, nativeName:api?.nativeName||null, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], source:api?.source||null, addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
+      enriched.push({...base, id:uid(), rarity:detectedRarity, officialName:api?.officialName||base.name, nativeName:api?.nativeName||null, nameEs:api?.nameEs||null, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, imageScrydex:api?.imageScrydex||null, scrydexUrl:api?.scrydexUrl||null, types:api?.types||[], source:api?.source||null, tcgPrice:api?.tcgPrice||null, addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
     }
     setScanned(enriched); setPhase("done");
   };
@@ -806,34 +835,42 @@ function ScanTab({inv, saveInv, showToast}) {
                             </div>
                           </div>
                           <div style={{marginTop:8}}>
-                            {/* Price or Scrydex link */}
-                            {card.language==="Japanese" && card.scrydexUrl ? (
+                            {card.tcgPrice ? (
+                              // Real price from TCGdex
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+                                <div>
+                                  <div style={{fontFamily:"monospace",fontSize:18,color:"#4ade80",fontWeight:700}}>{fclp(card.tcgPrice.clp)}</div>
+                                  <div style={{fontSize:9,color:"#475569"}}>
+                                    {card.tcgPrice.src==="tcgplayer"?`TCGPlayer US$${card.tcgPrice.usd?.toFixed(2)}`:card.tcgPrice.src==="cardmarket"?`Cardmarket €${card.tcgPrice.eur?.toFixed(2)}`:"precio real"}
+                                  </div>
+                                </div>
+                                <span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(74,222,128,.15)",color:"#4ade80",fontWeight:600}}>✓ precio real</span>
+                              </div>
+                            ) : card.language==="Japanese" && card.scrydexUrl ? (
+                              // JP card without TCGdex price — show Scrydex link
                               <a href={card.scrydexUrl} target="_blank" rel="noreferrer"
                                 style={{display:"flex",alignItems:"center",gap:6,padding:"8px 12px",background:"linear-gradient(135deg,rgba(250,204,21,.15),rgba(245,158,11,.1))",border:"1px solid rgba(250,204,21,.3)",borderRadius:10,textDecoration:"none"}}>
                                 <span style={{fontSize:14}}>💰</span>
                                 <div>
                                   <div style={{fontSize:12,color:"#facc15",fontWeight:700}}>Ver precio real en Scrydex</div>
-                                  <div style={{fontSize:10,color:"#64748b"}}>Precio JP actualizado diariamente</div>
+                                  <div style={{fontSize:10,color:"#64748b"}}>Actualizado diariamente</div>
                                 </div>
                                 <span style={{color:"#facc15",fontSize:14,marginLeft:"auto"}}>›</span>
                               </a>
                             ) : (
+                              // Estimated price range
                               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
                                 <div>
                                   <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}–{fclp(r.max)}</div>
                                   <div style={{fontSize:9,color:"#475569"}}>rango estimado CLP</div>
                                 </div>
-                                {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
-                                {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
                               </div>
                             )}
-                            {/* Always show Scrydex link for JP cards even if we show price */}
-                            {card.language==="Japanese" && card.scrydexUrl && (
-                              <div style={{marginTop:4,display:"flex",gap:4}}>
-                                {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
-                                {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
-                              </div>
-                            )}
+                            {/* Source badge */}
+                            <div style={{display:"flex",gap:4,marginTop:4}}>
+                              {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
+                              {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
+                            </div>
                           </div>
                         </div>
                       </div>
