@@ -364,21 +364,6 @@ async function fetchRealPrice(card) {
   try {
     const cleanName = (card.officialName||card.name||"").replace(/['"]/g,"").trim();
     const USD_TO_CLP = 950;
-
-    // For Japanese cards: try Scrydex first (most accurate for JP prices)
-    if (card.language === "Japanese" && card.set && card.number) {
-      try {
-        const r = await fetch(
-          `/api/scrydex?name=${encodeURIComponent(cleanName)}&set=${encodeURIComponent(card.set)}&number=${encodeURIComponent(card.number)}`
-        );
-        if (r.ok) {
-          const d = await r.json();
-          if (d?.usd) return { usd: d.usd, clp: d.clp, src:"scrydex", conf:"h", scrydexUrl: d.url };
-        }
-      } catch {}
-    }
-
-    // For English cards (or JP fallback): use pokemontcg.io real TCGPlayer prices
     const enSet = JP_TO_EN_SET[card.set] || card.set;
     let cards = [];
 
@@ -396,19 +381,18 @@ async function fetchRealPrice(card) {
       );
       if (r.ok) { const d = await r.json(); cards = d.data || []; }
     }
+    if (!cards.length) return null;
 
-    if (cards.length) {
-      const nl = cleanName.toLowerCase();
-      const m = cards.find(c=>c.name?.toLowerCase()===nl)
-        || cards.find(c=>c.name?.toLowerCase().includes(nl.split(" ")[0].toLowerCase()))
-        || cards[0];
-      const prices = m?.tcgplayer?.prices;
-      if (prices) {
-        const tier = prices.holofoil || prices.normal || prices.reverseHolofoil || prices["1stEditionHolofoil"] || null;
-        if (tier?.market || tier?.mid) {
-          const usd = tier.market || tier.mid;
-          return { usd, clp: Math.round(usd * USD_TO_CLP), src:"tcgplayer", conf:"h" };
-        }
+    const nl = cleanName.toLowerCase();
+    const m = cards.find(c=>c.name?.toLowerCase()===nl)
+      || cards.find(c=>c.name?.toLowerCase().includes(nl.split(" ")[0].toLowerCase()))
+      || cards[0];
+    const prices = m?.tcgplayer?.prices;
+    if (prices) {
+      const tier = prices.holofoil || prices.normal || prices.reverseHolofoil || prices["1stEditionHolofoil"] || null;
+      if (tier?.market || tier?.mid) {
+        const usd = tier.market || tier.mid;
+        return { usd, clp: Math.round(usd * USD_TO_CLP), src:"tcgplayer", conf:"h" };
       }
     }
     return null;
@@ -822,23 +806,33 @@ function ScanTab({inv, saveInv, showToast}) {
                             </div>
                           </div>
                           <div style={{marginTop:8}}>
-                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
-                              <div>
-                                <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}</div>
-                                <div style={{fontSize:9,color:"#475569"}}>precio estimado CLP</div>
-                              </div>
-                              <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+                            {/* Price or Scrydex link */}
+                            {card.language==="Japanese" && card.scrydexUrl ? (
+                              <a href={card.scrydexUrl} target="_blank" rel="noreferrer"
+                                style={{display:"flex",alignItems:"center",gap:6,padding:"8px 12px",background:"linear-gradient(135deg,rgba(250,204,21,.15),rgba(245,158,11,.1))",border:"1px solid rgba(250,204,21,.3)",borderRadius:10,textDecoration:"none"}}>
+                                <span style={{fontSize:14}}>💰</span>
+                                <div>
+                                  <div style={{fontSize:12,color:"#facc15",fontWeight:700}}>Ver precio real en Scrydex</div>
+                                  <div style={{fontSize:10,color:"#64748b"}}>Precio JP actualizado diariamente</div>
+                                </div>
+                                <span style={{color:"#facc15",fontSize:14,marginLeft:"auto"}}>›</span>
+                              </a>
+                            ) : (
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+                                <div>
+                                  <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}–{fclp(r.max)}</div>
+                                  <div style={{fontSize:9,color:"#475569"}}>rango estimado CLP</div>
+                                </div>
                                 {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
                                 {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
                               </div>
-                            </div>
-                            {/* Scrydex price link for JP cards */}
-                            {card.scrydexUrl&&(
-                              <a href={card.scrydexUrl} target="_blank" rel="noreferrer"
-                                style={{display:"flex",alignItems:"center",gap:5,marginTop:8,padding:"6px 10px",background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.2)",borderRadius:8,textDecoration:"none"}}>
-                                <span style={{fontSize:11}}>💰</span>
-                                <span style={{fontSize:11,color:"#facc15",fontWeight:600}}>Ver precio real en Scrydex →</span>
-                              </a>
+                            )}
+                            {/* Always show Scrydex link for JP cards even if we show price */}
+                            {card.language==="Japanese" && card.scrydexUrl && (
+                              <div style={{marginTop:4,display:"flex",gap:4}}>
+                                {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
+                                {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
+                              </div>
                             )}
                           </div>
                         </div>
@@ -934,10 +928,24 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:12,color:"#475569"}}>Mejor precio</span><span style={{fontSize:10,padding:"2px 7px",borderRadius:4,background:`${src.color}22`,color:src.color}}>{src.label}</span></div>
             <div style={{fontFamily:"monospace",fontSize:24,color:src.color,fontWeight:700}}>{fclp(best.value)}</div>
           </div>
-          <div style={{display:"flex",gap:8,marginBottom:14}}>
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
             <button onClick={()=>{setShowPrice(true);setManualPrice(prices[detail.id]?.tcgmatch_clp||"");}} style={{flex:1,background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.2)",color:"#facc15",borderRadius:12,padding:"11px",fontSize:13,cursor:"pointer"}}>✏️ tcgmatch</button>
             <button onClick={()=>fetchP(detail)} disabled={fetchingP} style={{flex:1,background:"rgba(96,165,250,.08)",border:"1px solid rgba(96,165,250,.2)",color:"#60a5fa",borderRadius:12,padding:"11px",fontSize:13,cursor:"pointer"}}>{fetchingP?"...":"⚡ TCGPlayer"}</button>
           </div>
+          {detail.language==="Japanese"&&(()=>{
+            const sUrl = detail.scrydexUrl || scrydexCardUrl(detail.officialName||detail.name, detail.set, detail.number);
+            return sUrl ? (
+              <a href={sUrl} target="_blank" rel="noreferrer"
+                style={{display:"flex",alignItems:"center",gap:8,padding:"11px 14px",background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.25)",borderRadius:12,textDecoration:"none",marginBottom:14}}>
+                <span style={{fontSize:16}}>💰</span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,color:"#facc15",fontWeight:700}}>Ver precio en Scrydex</div>
+                  <div style={{fontSize:10,color:"#64748b"}}>Precio JP real · actualizado diario</div>
+                </div>
+                <span style={{color:"#facc15",fontSize:16}}>›</span>
+              </a>
+            ) : null;
+          })()}
           <div style={{fontSize:12,color:"#475569",marginBottom:8}}>Estado</div>
           <div style={{display:"flex",gap:8,marginBottom:14}}>{Object.entries(INV_STATUS).map(([k,v])=><button key={k} onClick={()=>chgSt(detail.id,k)} style={{flex:1,padding:"10px 4px",borderRadius:10,cursor:"pointer",border:"none",fontSize:11,fontWeight:600,background:detail.status===k?`${v.color}25`:"rgba(255,255,255,.05)",color:detail.status===k?v.color:"#64748b",outline:detail.status===k?`1.5px solid ${v.color}50`:"none"}}>{v.label}</button>)}</div>
           <Btn variant="danger" onClick={()=>delC(detail.id)}>🗑 Eliminar</Btn>
