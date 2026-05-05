@@ -70,11 +70,13 @@ async function callClaude(body) {
 
 // Known set code corrections (common misreads)
 const SET_CODE_FIXES = {
-  "sv8b":"sv8a", "svb8":"sv8a", "sv8":"sv8a",  // Terastal Festival often misread
-  "sv2b":"sv2a",                                 // Pokemon 151 misread
-  "sv4a":"sv8a",                                 // Common confusion
+  "sv8b":"sv8a", "svb8":"sv8a",
+  "sv2b":"sv2a",
   "svba":"sv8a", "sv8ba":"sv8a",
 };
+
+// Sets that are Japanese-only or special (no EN equivalent)
+const JP_ONLY_SETS = new Set(["sv8a","sv7a","sv5a","sv3a","sv1a","sv1S","sv1V","M4","m4","PCLC"]);
 
 function robustJsonParse(text) {
   if (!text) return { cards:[] };
@@ -112,7 +114,8 @@ async function identifyCards(base64, mimeType) {
     "sv4b=Future Flash | sv4=Ancient Roar | sv3a=Raging Surf | sv3=Ruler of Black Flame | " +
     "sv2a=Pokemon Card 151(165 cards) | sv2b=Clay Burst | sv2=Snow Hazard | " +
     "sv1a=Triplet Beat | sv1S=Scarlet ex | sv1V=Violet ex | " +
-    "Hint: use the total card count (e.g. /187 → sv8a, /165 → sv2a, /190 → sv4a)\n\n" +
+    "M4=Pokemon Card Game Classic(83 cards) | " +
+    "Hint: use the total card count (e.g. /187 → sv8a, /165 → sv2a, /190 → sv4a, /083 → M4)\n\n" +
     "Return ONLY valid JSON, nothing else:\n" +
     "{\"cards\":[{\"name\":\"English name\",\"set\":\"set CODE\",\"number\":\"number/total\",\"rarity\":\"Common|Uncommon|Rare|Rare Holo|Rare Holo EX|Rare Holo V|Rare Holo VMAX|Rare Ultra|Rare Secret\",\"language\":\"English|Spanish|Japanese|Other\",\"condition\":\"Mint|Near Mint|Good|Played|Poor\"}]}\n" +
     "If no Pokemon cards visible, return {\"cards\":[]}.";
@@ -165,27 +168,32 @@ async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
     }
 
     if (d?.image) {
-      // Get English name from TCGdex English endpoint
+      // Try to get English name from TCGdex English endpoint
       let englishNameFinal = englishName;
-      let nameMatches = false;
+      let enLookupFound = false;
+      let nameMatches = true; // default true — only reject if English exists AND mismatches
+
       try {
         for (const n of [numPadded, numPlain].filter(Boolean)) {
           const re = await fetch(`https://api.tcgdex.net/v2/en/sets/${setCode}/${n}`);
           if (re.ok) {
             const de = await re.json();
             if (de?.name) {
+              enLookupFound = true;
               englishNameFinal = de.name;
-              // Validate: check if returned name matches what Claude identified
-              const expectedLower = englishName.toLowerCase().split(" ")[0];
-              const returnedLower = de.name.toLowerCase().split(" ")[0];
-              nameMatches = returnedLower.includes(expectedLower) || expectedLower.includes(returnedLower);
+              // Only reject if English lookup succeeded but names clearly don't match
+              const expectedFirst = englishName.toLowerCase().split(" ")[0];
+              const returnedFirst = de.name.toLowerCase().split(" ")[0];
+              nameMatches = returnedFirst.includes(expectedFirst) || expectedFirst.includes(returnedFirst);
               break;
             }
           }
         }
       } catch {}
 
-      // Only use TCGdex image if name matches — otherwise fall through to pokemontcg.io
+      // Use JP image if:
+      // - English lookup succeeded and name matches, OR
+      // - English lookup failed (JP-only set) — Claude's translation is trusted
       if (nameMatches) {
         return {
           officialName: englishNameFinal,
@@ -284,7 +292,25 @@ async function fetchPricesWithClaude(cards) {
     max_tokens: 800,
     system: `Pokémon TCG pricing expert. Return ONLY JSON array, no markdown.
 Format: [{"i":1,"usd":X.XX,"clp":XXXXX,"src":"tcgplayer|estimate","conf":"h|m|l"}]
-TCGPlayer market prices, 950 CLP per USD. Rarity: Common $0.10, Uncommon $0.25, Rare $1, Holo $4, EX/V $8, VMAX $12, Ultra $20, Secret $40.`,
+TCGPlayer/CardMarket prices, 950 CLP per USD.
+
+Rarity price guide (USD):
+- Common: $0.10 | Uncommon: $0.25 | Rare: $1.00
+- Rare Holo: $4.00 | EX/GX/V: $8.00 | VMAX/VSTAR: $12.00
+- Ultra Rare/Full Art: $20.00 | Secret Rare/ACE SPEC: $40.00
+- Illustration Rare (IR): $15-80 | Special Illustration Rare (SAR/SIR): $80-300
+
+Popular Pokémon PREMIUM (multiply base price):
+- Charizard: 5-20x | Mega Greninja/Greninja: 3-10x
+- Pikachu/Eevee: 3-8x | Mewtwo/Mew: 3-6x
+- Gengar/Umbreon/Espeon: 2-5x | Gardevoir: 2-4x
+
+Special cases (known high-value cards):
+- Mega Greninja ex SAR (M4 114/083): ~$250-280 USD
+- Charizard ex SAR: ~$100-200 USD
+
+Japanese exclusive sets (M4, sv8a, sv7a etc.): price same or +10% vs English.
+Condition: Mint=full, NM=90%, Good=60%, Played=30%.`,
     messages: [{role:"user",content:`Price these cards:\n${list}`}]
   });
   const t = d.content?.find(b=>b.type==="text")?.text || "[]";
