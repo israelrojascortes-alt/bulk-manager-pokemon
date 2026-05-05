@@ -12,6 +12,7 @@ const RARITY = {
   "Rare Holo VMAX": { label:"VMAX",        color:"#e879f9", min:4000,  max:15000 },
   "Rare Ultra":     { label:"Ultra Rare",  color:"#60a5fa", min:5000,  max:20000 },
   "Rare Secret":    { label:"Secret Rare", color:"#f43f5e", min:10000, max:50000 },
+  "SAR":            { label:"SAR",         color:"#f43f5e", min:80000, max:300000 },
   "Unknown":        { label:"?",           color:"#475569", min:100,   max:300   },
 };
 
@@ -151,6 +152,20 @@ const JP_TO_EN_SET = {
   "sv7":"sv7","sv7a":"sv8","sv8":"sv8","sv8a":"sv8pt5","sv8b":"sv9","sv9":"sv9",
 };
 
+// Scrydex CDN image URL for Japanese cards (public CDN, no API key needed)
+function scrydexImgUrl(setCode, number) {
+  if (!setCode || !number) return null;
+  const numPadded = String(number).split("/")[0].replace(/^0+/,"").padStart(3,"0");
+  return `https://images.scrydex.com/pokemon/${setCode.toLowerCase()}_ja-${numPadded}/medium`;
+}
+
+function scrydexCardUrl(name, setCode, number) {
+  if (!name || !setCode || !number) return null;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+  const numClean = String(number).split("/")[0].replace(/^0+/,"");
+  return `https://scrydex.com/pokemon/cards/${slug}/${setCode.toLowerCase()}_ja-${numClean}`;
+}
+
 // TCGdex: search by set + number (exact match for JP/ES/FR etc.)
 async function enrichCardTCGdex(englishName, setCode, cardNumber, langCode) {
   try {
@@ -218,11 +233,48 @@ async function enrichCard(name, setCode, cardNumber, language) {
     const num = cardNumber && cardNumber !== "?" ? cardNumber.split("/")[0].replace(/^0+/, "") : null;
     const langCode = LANG_TO_TCGDEX[language];
 
-    // For non-English cards: try TCGdex first (has native JP/ES/FR images)
+    // Special handling for M4 (Pokemon Card Game Classic) — TCGdex uses code "PCLC"
+    if ((setCode === "M4" || setCode === "m4") && num) {
+      const scrydexImg = scrydexImgUrl(setCode, num);
+      const scrydexUrl = scrydexCardUrl(cleanName, setCode, num);
+      try {
+        for (const n of [num, num.padStart(3,"0")]) {
+          const r = await fetch(`https://api.tcgdex.net/v2/ja/sets/PCLC/${n}`);
+          if (r.ok) {
+            const d = await r.json();
+            if (d?.image) return {
+              officialName: cleanName,
+              nativeName:   d.name||null,
+              rarity:       "SAR",
+              set:          "M4",
+              number:       num,
+              image:        scrydexImg || d.image+"/low.webp",
+              imageLarge:   scrydexImg || d.image+"/high.webp",
+              imageScrydex: scrydexImg,
+              scrydexUrl,
+              types:        [],
+              source:       scrydexImg ? "scrydex" : "tcgdex",
+            };
+          }
+        }
+      } catch {}
+      // Even if TCGdex fails, return with Scrydex image
+      if (scrydexImg) return {
+        officialName: cleanName, nativeName: null, rarity: "SAR",
+        set: "M4", number: num, image: scrydexImg, imageLarge: scrydexImg,
+        imageScrydex: scrydexImg, scrydexUrl, types: [], source: "scrydex",
+      };
+    }
+
+    // For non-English cards: try TCGdex first, Scrydex CDN as image override
     if (langCode && langCode !== "en") {
       const tcgResult = await enrichCardTCGdex(cleanName, setCode, num, langCode);
+
+      // Try Scrydex CDN image (public, no auth needed)
+      const scrydexImg = scrydexImgUrl(setCode, num);
+      const scrydexUrl = scrydexCardUrl(cleanName, setCode, num);
+
       if (tcgResult) {
-        // Also fetch Spanish name if card is Japanese
         let nameEs = null;
         if (language === "Japanese") {
           try {
@@ -233,7 +285,29 @@ async function enrichCard(name, setCode, cardNumber, language) {
             }
           } catch {}
         }
-        return { ...tcgResult, nameEs };
+        return {
+          ...tcgResult, nameEs,
+          // Prefer Scrydex CDN image if available (better quality)
+          imageScrydex: scrydexImg,
+          scrydexUrl,
+        };
+      }
+
+      // No TCGdex result but we can still provide Scrydex image + link
+      if (scrydexImg) {
+        return {
+          officialName: cleanName,
+          nativeName:   null,
+          rarity:       null,
+          set:          setCode,
+          number:       num,
+          image:        scrydexImg,
+          imageLarge:   scrydexImg,
+          imageScrydex: scrydexImg,
+          scrydexUrl,
+          types:        [],
+          source:       "scrydex",
+        };
       }
     }
 
@@ -601,7 +675,13 @@ function ScanTab({inv, saveInv, showToast}) {
       setProgress({current:i+1, total:identified.length});
       const base = identified[i];
       const api  = await enrichCard(base.name, base.set, base.number, base.language);
-      enriched.push({...base, id:uid(), rarity:api?.rarity||base.rarity||"Unknown", officialName:api?.officialName||base.name, nativeName:api?.nativeName||null, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], source:api?.source||null, addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
+      // Auto-detect SAR: number > total (e.g. 114/083 = over-numbered = special art)
+      const rawNum = base.number||"";
+      const numParts = rawNum.split("/");
+      const isOverNumbered = numParts.length===2 && parseInt(numParts[0])>parseInt(numParts[1]);
+      const detectedRarity = isOverNumbered ? "SAR" : (api?.rarity||base.rarity||"Unknown");
+
+      enriched.push({...base, id:uid(), rarity:detectedRarity, officialName:api?.officialName||base.name, nativeName:api?.nativeName||null, officialSet:api?.set||base.set||"?", number:api?.number||base.number||"?", image:api?.image||null, imageLarge:api?.imageLarge||null, types:api?.types||[], source:api?.source||null, addedAt:today(), status:"disponible", lotId:null, enriched:!!api});
     }
     setScanned(enriched); setPhase("done");
   };
@@ -689,22 +769,23 @@ function ScanTab({inv, saveInv, showToast}) {
                   const r=rd(card.rarity);
                   return (
                     <div key={i} style={{background:"rgba(13,17,23,.95)",border:`1px solid ${r.color}33`,borderRadius:16,overflow:"hidden"}}>
-                      {/* Card image — full width referential */}
                       <div style={{display:"flex",gap:0}}>
-                        {/* Image column */}
+                        {/* Image column — Scrydex > TCGdex > pokemontcg.io */}
                         <div style={{width:100,flexShrink:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",minHeight:140,padding:6}}>
-                          {(card.imageLarge||card.image) ? (
+                          {(card.imageScrydex||card.imageLarge||card.image) ? (
                             <img
-                              src={card.imageLarge||card.image}
+                              src={card.imageScrydex||card.imageLarge||card.image}
                               alt={card.officialName||card.name}
                               style={{width:88,borderRadius:8,display:"block",boxShadow:"0 4px 12px rgba(0,0,0,.5)"}}
                               onError={e=>{
-                                if (card.image && e.target.src !== card.image) { e.target.src = card.image; }
+                                const fallbacks = [card.imageLarge, card.image].filter(Boolean);
+                                const cur = fallbacks.findIndex(u=>u===e.target.src);
+                                if (cur < fallbacks.length-1) { e.target.src = fallbacks[cur+1]; }
                                 else { e.target.style.display="none"; e.target.nextSibling.style.display="flex"; }
                               }}
                             />
                           ) : null}
-                          <div style={{display:(card.imageLarge||card.image)?"none":"flex",alignItems:"center",justifyContent:"center",width:88,height:123,borderRadius:8,background:`${r.color}15`,border:`1px solid ${r.color}30`,flexDirection:"column",gap:4}}>
+                          <div style={{display:(card.imageScrydex||card.imageLarge||card.image)?"none":"flex",alignItems:"center",justifyContent:"center",width:88,height:123,borderRadius:8,background:`${r.color}15`,border:`1px solid ${r.color}30`,flexDirection:"column",gap:4}}>
                             <span style={{fontSize:28}}>🃏</span>
                             <span style={{fontSize:9,color:"#475569"}}>Sin imagen</span>
                           </div>
@@ -725,15 +806,25 @@ function ScanTab({inv, saveInv, showToast}) {
                               <span style={{fontSize:11,padding:"3px 8px",borderRadius:6,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{card.condition}</span>
                             </div>
                           </div>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                            <div>
-                              <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}</div>
-                              <div style={{fontSize:9,color:"#475569"}}>precio estimado CLP</div>
+                          <div style={{marginTop:8}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+                              <div>
+                                <div style={{fontFamily:"monospace",fontSize:16,color:"#facc15",fontWeight:700}}>{fclp(r.min)}</div>
+                                <div style={{fontSize:9,color:"#475569"}}>precio estimado CLP</div>
+                              </div>
+                              <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+                                {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
+                                {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
+                              </div>
                             </div>
-                            <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                              {card.enriched&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>✓ apitcg</span>}
-                              {card.source&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{card.source==="tcgdex"?"🖼️ "+card.language:"🖼️ EN"}</span>}
-                            </div>
+                            {/* Scrydex price link for JP cards */}
+                            {card.scrydexUrl&&(
+                              <a href={card.scrydexUrl} target="_blank" rel="noreferrer"
+                                style={{display:"flex",alignItems:"center",gap:5,marginTop:8,padding:"6px 10px",background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.2)",borderRadius:8,textDecoration:"none"}}>
+                                <span style={{fontSize:11}}>💰</span>
+                                <span style={{fontSize:11,color:"#facc15",fontWeight:600}}>Ver precio real en Scrydex →</span>
+                              </a>
+                            )}
                           </div>
                         </div>
                       </div>
