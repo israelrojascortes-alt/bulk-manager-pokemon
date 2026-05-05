@@ -363,8 +363,23 @@ async function enrichCard(name, setCode, cardNumber, language) {
 async function fetchRealPrice(card) {
   try {
     const cleanName = (card.officialName||card.name||"").replace(/['"]/g,"").trim();
-    const enSet = JP_TO_EN_SET[card.set] || card.set;
     const USD_TO_CLP = 950;
+
+    // For Japanese cards: try Scrydex first (most accurate for JP prices)
+    if (card.language === "Japanese" && card.set && card.number) {
+      try {
+        const r = await fetch(
+          `/api/scrydex?name=${encodeURIComponent(cleanName)}&set=${encodeURIComponent(card.set)}&number=${encodeURIComponent(card.number)}`
+        );
+        if (r.ok) {
+          const d = await r.json();
+          if (d?.usd) return { usd: d.usd, clp: d.clp, src:"scrydex", conf:"h", scrydexUrl: d.url };
+        }
+      } catch {}
+    }
+
+    // For English cards (or JP fallback): use pokemontcg.io real TCGPlayer prices
+    const enSet = JP_TO_EN_SET[card.set] || card.set;
     let cards = [];
 
     if (enSet && enSet !== "?") {
