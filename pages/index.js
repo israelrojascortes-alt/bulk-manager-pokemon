@@ -662,8 +662,51 @@ function ScanTab({inv, saveInv, showToast}) {
   const [saving, setSaving]     = useState(false);
   const [saved, setSaved]       = useState(false);
   const [showListing, setShowListing] = useState(false);
+
+  // Manual correction state
+  const [editingIdx, setEditingIdx]     = useState(null);
+  const [searchQuery, setSearchQuery]   = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching]       = useState(false);
+
   const cameraRef  = useRef();
   const galleryRef = useRef();
+
+  // Search pokemontcg.io for manual correction
+  const doSearch = async (q) => {
+    if (!q.trim()) { setSearchResults([]); return; }
+    setSearching(true);
+    try {
+      const r = await fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${q.trim()}"`)}&pageSize=12&select=id,name,set,rarity,images,types,number&orderBy=-set.releaseDate`,
+        { headers: { "Accept":"application/json" } }
+      );
+      if (r.ok) { const d = await r.json(); setSearchResults(d.data||[]); }
+      else setSearchResults([]);
+    } catch { setSearchResults([]); }
+    setSearching(false);
+  };
+
+  // Apply manual selection to scanned card
+  const applyCorrection = (result) => {
+    if (editingIdx === null) return;
+    setScanned(prev => prev.map((card, i) => i !== editingIdx ? card : {
+      ...card,
+      officialName: result.name,
+      officialSet:  result.set?.id || card.officialSet,
+      number:       result.number || card.number,
+      rarity:       result.rarity || card.rarity,
+      image:        result.images?.small || card.image,
+      imageLarge:   result.images?.large || card.imageLarge,
+      imageScrydex: null,
+      source:       "manual",
+      enriched:     true,
+    }));
+    setEditingIdx(null);
+    setSearchQuery("");
+    setSearchResults([]);
+    showToast("Carta corregida ✓");
+  };
 
   const loadFile = useCallback(file => {
     if (!file?.type.startsWith("image/")) return;
@@ -866,10 +909,17 @@ function ScanTab({inv, saveInv, showToast}) {
                                 </div>
                               </div>
                             )}
-                            {/* Source badge */}
-                            <div style={{display:"flex",gap:4,marginTop:4}}>
-                              {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
-                              {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
+                            {/* Source badge + Correct button */}
+                            <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"space-between",alignItems:"center"}}>
+                              <div style={{display:"flex",gap:4}}>
+                                {card.source==="scrydex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(250,204,21,.12)",color:"#facc15"}}>🖼️ Scrydex</span>}
+                                {card.source==="tcgdex"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>🖼️ TCGdex</span>}
+                                {card.source==="manual"&&<span style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:"rgba(96,165,250,.12)",color:"#60a5fa"}}>✏️ Manual</span>}
+                              </div>
+                              <button onClick={()=>{setEditingIdx(i);setSearchQuery(card.officialName||card.name||"");setSearchResults([]);doSearch(card.officialName||card.name||"");}}
+                                style={{fontSize:10,padding:"3px 10px",borderRadius:6,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",cursor:"pointer"}}>
+                                ✏️ Corregir
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -899,6 +949,70 @@ function ScanTab({inv, saveInv, showToast}) {
 
       <Sheet open={showListing} onClose={()=>setShowListing(false)} title="LISTING" height="65vh">
         {scanned?.length>0&&(()=>{const byR={};scanned.forEach(c=>{const l=rd(c.rarity).label;byR[l]=(byR[l]||0)+1;});const text=`Lote ${scanned.length} cartas Pokémon bulk\n\nComposición:\n${Object.entries(byR).map(([r,n])=>`• ${n}x ${r}`).join("\n")}\n\nCartas revisadas. Envío a todo Chile.\n💰 ${fclp(totalMin)}–${fclp(totalMax)} CLP\n📍 Ref: tcgmatch.cl`;return(<><div style={{background:"rgba(0,0,0,.4)",border:"1px solid rgba(250,204,21,.15)",borderRadius:12,padding:14,marginBottom:14}}><pre style={{fontSize:13,color:"#94a3b8",whiteSpace:"pre-wrap",lineHeight:1.7}}>{text}</pre></div><Btn onClick={()=>{navigator.clipboard.writeText(text);showToast("Copiado ✓");setShowListing(false);}}>📋 Copiar</Btn></>);})()} 
+      </Sheet>
+
+      {/* Manual correction sheet */}
+      <Sheet open={editingIdx!==null} onClose={()=>{setEditingIdx(null);setSearchQuery("");setSearchResults([]);}} title="CORREGIR CARTA" height="90vh">
+        <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>
+          Busca la carta correcta y selecciónala
+        </div>
+        {/* Search input */}
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          <input
+            value={searchQuery}
+            onChange={e=>setSearchQuery(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&doSearch(searchQuery)}
+            placeholder="Ej: Togekiss, Alakazam ex..."
+            style={{...iStyle, flex:1}}
+            autoFocus
+          />
+          <button onClick={()=>doSearch(searchQuery)} style={{background:"linear-gradient(135deg,#facc15,#f59e0b)",color:"#090d12",border:"none",borderRadius:10,padding:"0 16px",fontSize:14,fontWeight:700,cursor:"pointer",flexShrink:0}}>
+            {searching?"...":"🔍"}
+          </button>
+        </div>
+
+        {/* Current card */}
+        {editingIdx!==null && scanned?.[editingIdx] && (
+          <div style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:12,padding:"10px 12px",marginBottom:14,display:"flex",gap:10,alignItems:"center"}}>
+            <span style={{fontSize:10,color:"#475569"}}>Actual:</span>
+            {(scanned[editingIdx].imageScrydex||scanned[editingIdx].imageLarge||scanned[editingIdx].image)&&(
+              <img src={scanned[editingIdx].imageScrydex||scanned[editingIdx].imageLarge||scanned[editingIdx].image} alt="" style={{width:30,borderRadius:4}}/>
+            )}
+            <div>
+              <div style={{fontSize:13,color:"#94a3b8",fontWeight:600}}>{scanned[editingIdx].officialName||scanned[editingIdx].name}</div>
+              <div style={{fontSize:10,color:"#475569",fontFamily:"monospace"}}>{scanned[editingIdx].officialSet||scanned[editingIdx].set} · {scanned[editingIdx].number}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Results */}
+        {searching && <div style={{textAlign:"center",padding:20,color:"#475569"}}>Buscando...</div>}
+        {!searching && searchResults.length===0 && searchQuery && (
+          <div style={{textAlign:"center",padding:20,color:"#475569"}}>Sin resultados para "{searchQuery}"</div>
+        )}
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {searchResults.map(result=>{
+            const r = rd(result.rarity);
+            return (
+              <button key={result.id} onClick={()=>applyCorrection(result)} style={{display:"flex",gap:10,padding:"10px 12px",background:"rgba(13,17,23,.95)",border:`1px solid ${r.color}22`,borderRadius:12,cursor:"pointer",textAlign:"left",alignItems:"center",width:"100%"}}>
+                {result.images?.small ? (
+                  <img src={result.images.small} alt={result.name} style={{width:42,borderRadius:5,flexShrink:0}}/>
+                ) : (
+                  <div style={{width:42,height:58,borderRadius:5,background:`${r.color}15`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:18}}>🃏</span></div>
+                )}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#e2e8f0"}}>{result.name}</div>
+                  <div style={{fontSize:11,color:"#475569",fontFamily:"monospace",marginTop:1}}>{result.set?.name} · #{result.number}</div>
+                  <div style={{display:"flex",gap:4,marginTop:4}}>
+                    <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:`${r.color}20`,color:r.color}}>{r.label}</span>
+                    <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>{result.set?.id}</span>
+                  </div>
+                </div>
+                <span style={{color:"#4ade80",fontSize:18,flexShrink:0}}>✓</span>
+              </button>
+            );
+          })}
+        </div>
       </Sheet>
     </div>
   );
