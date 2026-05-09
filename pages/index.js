@@ -1128,6 +1128,7 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
   const [saving,setSaving]     = useState(false);
   const [manualPrice,setManualPrice] = useState("");
   const [autoFetching,setAutoFetching] = useState(false);
+  const [detailSUrl, setDetailSUrl]   = useState(null);
 
   const filtered = inv.filter(c=>{const q=search.toLowerCase();return !q||c.name?.toLowerCase().includes(q)||c.set?.toLowerCase().includes(q);});
   const avail = inv.filter(c=>c.status==="disponible").length;
@@ -1187,7 +1188,7 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
       {filtered.length===0
         ?<div style={{textAlign:"center",padding:48,color:"#475569",opacity:.5}}><div style={{fontSize:36,marginBottom:8}}>📭</div>Sin cartas</div>
         :filtered.map(card=>{const r=rd(card.rarity);const best=getBestPrice(card,prices);const src=SRC[best.source];return(
-          <button key={card.id} onClick={()=>setDetail(card)} style={{width:"100%",display:"flex",gap:12,padding:"12px",background:"rgba(13,17,23,.95)",border:`1px solid ${r.color}18`,borderRadius:14,marginBottom:8,cursor:"pointer",textAlign:"left",alignItems:"center"}}>
+          <button key={card.id} onClick={()=>{setDetail(card);setDetailSUrl(scrydexCardUrl(card.officialName||card.name, card.set, card.number)||card.scrydexUrl||null);}} style={{width:"100%",display:"flex",gap:12,padding:"12px",background:"rgba(13,17,23,.95)",border:`1px solid ${r.color}18`,borderRadius:14,marginBottom:8,cursor:"pointer",textAlign:"left",alignItems:"center"}}>
             <CardArt card={card} size={44}/>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:14,fontWeight:700,color:"#e2e8f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.officialName||card.name}</div>
@@ -1213,7 +1214,7 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
           const marketClp = p?.tcgmatch_clp || p?.tcg_clp_market || null;
           const isEstimated = !p || p.source==="estimated" || p.source==="est" || (!p.tcgmatch_clp && p.confidence!=="h");
           const optimalClp = marketClp ? Math.round(marketClp * 1.08 / 100) * 100 : null;
-          const sUrl = detail.scrydexUrl || scrydexCardUrl(detail.officialName||detail.name, detail.set, detail.number);
+          const sUrl = detailSUrl;
           const hasTcgmatch = !!p?.tcgmatch_clp;
           const showScrydexBlock = detail.language==="Japanese" && isEstimated && sUrl;
 
@@ -1366,8 +1367,8 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
             </div>
           </div>
           {manualPrice&&<div style={{fontSize:12,color:"#4ade80",marginBottom:12,textAlign:"center"}}>= {fclp(parseInt(manualPrice)||0)}</div>}
-          {detail.language==="Japanese"&&sUrl&&(
-            <a href={sUrl} target="_blank" rel="noreferrer" style={{display:"block",textAlign:"center",color:"#facc15",fontSize:13,marginBottom:12,textDecoration:"none"}}>🔗 Ver precio en Scrydex →</a>
+          {detail.language==="Japanese"&&detailSUrl&&(
+            <a href={detailSUrl} target="_blank" rel="noreferrer" style={{display:"block",textAlign:"center",color:"#facc15",fontSize:13,marginBottom:12,textDecoration:"none"}}>🔗 Ver precio en Scrydex →</a>
           )}
           <a href={`https://tcgmatch.cl/cartas/pokemon?q=${encodeURIComponent(detail?.name||"")}`} target="_blank" rel="noreferrer" style={{display:"block",textAlign:"center",color:"#64748b",fontSize:12,marginBottom:14,textDecoration:"none"}}>🔗 Ver en tcgmatch.cl →</a>
           <Btn onClick={()=>saveM(detail.id)} disabled={!manualPrice}>GUARDAR PRECIO</Btn>
