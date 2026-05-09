@@ -1120,23 +1120,42 @@ function ScanTab({inv, saveInv, showToast}) {
 //  STOCK TAB
 // ═══════════════════════════════════════════════════════════════════
 function StockTab({inv,prices,saveInv,savePrices,showToast}) {
-  const [search,setSearch]   = useState("");
-  const [detail,setDetail]   = useState(null);
-  const [showAdd,setShowAdd] = useState(false);
+  const [search,setSearch]     = useState("");
+  const [detail,setDetail]     = useState(null);
+  const [showAdd,setShowAdd]   = useState(false);
   const [showPrice,setShowPrice] = useState(false);
-  const [newCard,setNewCard] = useState({name:"",set:"",number:"",rarity:"Common",language:"Spanish",condition:"Near Mint"});
-  const [saving,setSaving]   = useState(false);
+  const [newCard,setNewCard]   = useState({name:"",set:"",number:"",rarity:"Common",language:"Spanish",condition:"Near Mint"});
+  const [saving,setSaving]     = useState(false);
   const [manualPrice,setManualPrice] = useState("");
-  const [fetchingP,setFetchingP] = useState(false);
+  const [autoFetching,setAutoFetching] = useState(false);
 
   const filtered = inv.filter(c=>{const q=search.toLowerCase();return !q||c.name?.toLowerCase().includes(q)||c.set?.toLowerCase().includes(q);});
   const avail = inv.filter(c=>c.status==="disponible").length;
   const val   = inv.reduce((s,c)=>s+getBestPrice(c,prices).value,0);
 
+  // Auto-fetch price when detail opens and no price exists yet
+  useEffect(()=>{
+    if (!detail) return;
+    const existing = prices[detail.id];
+    if (existing?.tcg_clp_market || existing?.tcgmatch_clp) return; // already have price
+    setAutoFetching(true);
+    fetchPricesWithClaude([detail]).then(r=>{
+      const p = r[0];
+      if (p?.clp) {
+        savePrices({...prices,[detail.id]:{
+          source: p.src==="tcgplayer"?"tcg":"estimated",
+          tcg_clp_market: p.clp, tcg_market: p.usd,
+          confidence: p.conf, fetchedAt: today()
+        }});
+      }
+      setAutoFetching(false);
+    }).catch(()=>setAutoFetching(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[detail?.id]);
+
   const addCard=()=>{if(!newCard.name.trim())return;setSaving(true);saveInv([{...newCard,id:uid(),addedAt:today(),status:"disponible",lotId:null,image:""},...inv]);setNewCard({name:"",set:"",number:"",rarity:"Common",language:"Spanish",condition:"Near Mint"});setShowAdd(false);setSaving(false);showToast("Carta agregada ✓");};
   const chgSt=async(id,s)=>{saveInv(inv.map(c=>c.id===id?{...c,status:s}:c));setDetail(p=>p?.id===id?{...p,status:s}:p);showToast("Estado actualizado");};
   const delC=(id)=>{saveInv(inv.filter(c=>c.id!==id));setDetail(null);showToast("Eliminada","warn");};
-  const fetchP=async(card)=>{setFetchingP(true);try{const r=await fetchPricesWithClaude([card]);const p=r[0];if(p?.clp){savePrices({...prices,[card.id]:{source:p.src==="tcgplayer"?"tcg":"estimated",tcg_clp_market:p.clp,tcg_market:p.usd,confidence:p.conf,fetchedAt:today()}});showToast(`${fclp(p.clp)} ✓ ${p.src==="tcgplayer"?"TCGPlayer":"estimado"}`);}else showToast("Sin precio","warn");}catch{showToast("Error","warn");}setFetchingP(false);};
   const saveM=(id)=>{const v=parseFloat(String(manualPrice).replace(/\D/g,""));if(!v)return;savePrices({...prices,[id]:{...prices[id]||{},tcgmatch_clp:v,source:"tcgmatch",fetchedAt:today()}});setManualPrice("");setShowPrice(false);showToast("Precio guardado ✓");};
 
   return (
@@ -1167,38 +1186,106 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
         );}
       )}
 
-      <Sheet open={!!detail} onClose={()=>setDetail(null)} title={detail?.officialName||detail?.name||""} height="90vh">
-        {detail&&(()=>{const r=rd(detail.rarity);const best=getBestPrice(detail,prices);const src=SRC[best.source];return(<>
-          <div style={{display:"flex",justifyContent:"center",marginBottom:18}}><CardArt card={detail} size={90}/></div>
-          {[["Set",detail.set+(detail.number&&detail.number!=="?"?` #${detail.number}`:"")],["Rareza",<span style={{color:r.color}}>{r.label}</span>],["Idioma",detail.language],["Condición",detail.condition],["Estado",<span style={{color:INV_STATUS[detail.status]?.color}}>{INV_STATUS[detail.status]?.label}</span>]].map(([k,v])=>(
-            <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"11px 0",borderBottom:"1px solid rgba(255,255,255,.06)"}}><span style={{fontSize:13,color:"#475569"}}>{k}</span><span style={{fontSize:13,color:"#e2e8f0",fontWeight:600}}>{v}</span></div>
-          ))}
-          <div style={{marginTop:14,background:`${src.color}10`,border:`1px solid ${src.color}30`,borderRadius:12,padding:14,marginBottom:10}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:12,color:"#475569"}}>Mejor precio</span><span style={{fontSize:10,padding:"2px 7px",borderRadius:4,background:`${src.color}22`,color:src.color}}>{src.label}</span></div>
-            <div style={{fontFamily:"monospace",fontSize:24,color:src.color,fontWeight:700}}>{fclp(best.value)}</div>
-          </div>
-          <div style={{display:"flex",gap:8,marginBottom:8}}>
-            <button onClick={()=>{setShowPrice(true);setManualPrice(prices[detail.id]?.tcgmatch_clp||"");}} style={{flex:1,background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.2)",color:"#facc15",borderRadius:12,padding:"11px",fontSize:13,cursor:"pointer"}}>✏️ tcgmatch</button>
-            <button onClick={()=>fetchP(detail)} disabled={fetchingP} style={{flex:1,background:"rgba(96,165,250,.08)",border:"1px solid rgba(96,165,250,.2)",color:"#60a5fa",borderRadius:12,padding:"11px",fontSize:13,cursor:"pointer"}}>{fetchingP?"...":"⚡ TCGPlayer"}</button>
-          </div>
-          {detail.language==="Japanese"&&(()=>{
-            const sUrl = detail.scrydexUrl || scrydexCardUrl(detail.officialName||detail.name, detail.set, detail.number);
-            return sUrl ? (
-              <a href={sUrl} target="_blank" rel="noreferrer"
-                style={{display:"flex",alignItems:"center",gap:8,padding:"11px 14px",background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.25)",borderRadius:12,textDecoration:"none",marginBottom:14}}>
-                <span style={{fontSize:16}}>💰</span>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:13,color:"#facc15",fontWeight:700}}>Ver precio en Scrydex</div>
-                  <div style={{fontSize:10,color:"#64748b"}}>Precio JP real · actualizado diario</div>
+      <Sheet open={!!detail} onClose={()=>setDetail(null)} title={detail?.officialName||detail?.name||""} height="92vh">
+        {detail&&(()=>{
+          const r    = rd(detail.rarity);
+          const p    = prices[detail.id];
+          const best = getBestPrice(detail,prices);
+          const marketClp = p?.tcg_clp_market || p?.tcgmatch_clp || null;
+          const optimalClp = marketClp ? Math.round(marketClp * 1.08 / 100) * 100 : null; // 8% sobre mercado
+          const sUrl = detail.scrydexUrl || scrydexCardUrl(detail.officialName||detail.name, detail.set, detail.number);
+          const hasTcgmatch = !!p?.tcgmatch_clp;
+
+          return (<>
+            {/* Card image */}
+            <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
+              <CardArt card={detail} size={90}/>
+            </div>
+
+            {/* Card info */}
+            {[["Set", detail.set+(detail.number&&detail.number!=="?"?` #${detail.number}`:"")],
+              ["Rareza", <span style={{color:r.color}}>{r.label}</span>],
+              ["Idioma", detail.language],
+              ["Condición", detail.condition],
+              ["Estado", <span style={{color:INV_STATUS[detail.status]?.color}}>{INV_STATUS[detail.status]?.label}</span>]
+            ].map(([k,v])=>(
+              <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid rgba(255,255,255,.06)"}}>
+                <span style={{fontSize:13,color:"#475569"}}>{k}</span>
+                <span style={{fontSize:13,color:"#e2e8f0",fontWeight:600}}>{v}</span>
+              </div>
+            ))}
+
+            {/* PRICE SECTION */}
+            <div style={{marginTop:16,marginBottom:14}}>
+              {autoFetching ? (
+                // Loading state
+                <div style={{background:"rgba(250,204,21,.06)",border:"1px solid rgba(250,204,21,.15)",borderRadius:14,padding:20,textAlign:"center"}}>
+                  <div style={{width:20,height:20,border:"2px solid rgba(250,204,21,.2)",borderTopColor:"#facc15",borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 10px"}}/>
+                  <div style={{fontSize:12,color:"#64748b"}}>Buscando precio de mercado...</div>
                 </div>
-                <span style={{color:"#facc15",fontSize:16}}>›</span>
-              </a>
-            ) : null;
-          })()}
-          <div style={{fontSize:12,color:"#475569",marginBottom:8}}>Estado</div>
-          <div style={{display:"flex",gap:8,marginBottom:14}}>{Object.entries(INV_STATUS).map(([k,v])=><button key={k} onClick={()=>chgSt(detail.id,k)} style={{flex:1,padding:"10px 4px",borderRadius:10,cursor:"pointer",border:"none",fontSize:11,fontWeight:600,background:detail.status===k?`${v.color}25`:"rgba(255,255,255,.05)",color:detail.status===k?v.color:"#64748b",outline:detail.status===k?`1.5px solid ${v.color}50`:"none"}}>{v.label}</button>)}</div>
-          <Btn variant="danger" onClick={()=>delC(detail.id)}>🗑 Eliminar</Btn>
-        </>);})()} 
+              ) : marketClp ? (
+                // Has real price
+                <>
+                  {/* Market price */}
+                  <div style={{background:"rgba(13,17,23,.95)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:"14px 16px",marginBottom:10}}>
+                    <div style={{fontSize:11,color:"#475569",marginBottom:4}}>Precio de mercado</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{fontFamily:"monospace",fontSize:22,color:"#e2e8f0",fontWeight:700}}>{fclp(marketClp)}</div>
+                      <span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:`${SRC[best.source]?.color}22`,color:SRC[best.source]?.color}}>{SRC[best.source]?.label}</span>
+                    </div>
+                    {p?.tcg_market&&<div style={{fontSize:10,color:"#475569",marginTop:2}}>US${p.tcg_market.toFixed(2)} · TCGPlayer</div>}
+                  </div>
+
+                  {/* Optimal selling price */}
+                  <div style={{background:"linear-gradient(135deg,rgba(250,204,21,.12),rgba(245,158,11,.08))",border:"1px solid rgba(250,204,21,.3)",borderRadius:14,padding:"14px 16px",marginBottom:10}}>
+                    <div style={{fontSize:11,color:"#facc15",marginBottom:4}}>💰 Precio óptimo de venta</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{fontFamily:"monospace",fontSize:26,color:"#facc15",fontWeight:700}}>{fclp(optimalClp)}</div>
+                      <span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(250,204,21,.15)",color:"#facc15"}}>+8% mercado</span>
+                    </div>
+                    <div style={{fontSize:10,color:"#64748b",marginTop:2}}>Rango sugerido: {fclp(marketClp)}–{fclp(Math.round(marketClp*1.2/100)*100)}</div>
+                  </div>
+                </>
+              ) : (
+                // No price yet
+                <div style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:16,textAlign:"center"}}>
+                  <div style={{fontSize:28,marginBottom:6}}>💭</div>
+                  <div style={{fontFamily:"monospace",fontSize:18,color:"#facc15",fontWeight:700,marginBottom:2}}>{fclp(best.value)}</div>
+                  <div style={{fontSize:10,color:"#475569"}}>estimado por rareza</div>
+                </div>
+              )}
+
+              {/* Source buttons — compact, secondary */}
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <button onClick={()=>{setShowPrice(true);setManualPrice(p?.tcgmatch_clp||"");}}
+                  style={{flex:1,padding:"9px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",fontSize:12,cursor:"pointer"}}>
+                  ✏️ tcgmatch.cl{hasTcgmatch?" ✓":""}
+                </button>
+                {detail.language==="Japanese"&&sUrl&&(
+                  <a href={sUrl} target="_blank" rel="noreferrer"
+                    style={{flex:1,padding:"9px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",fontSize:12,cursor:"pointer",textDecoration:"none",textAlign:"center"}}>
+                    🔗 Scrydex
+                  </a>
+                )}
+                <a href={`https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(detail.officialName||detail.name)}`} target="_blank" rel="noreferrer"
+                  style={{flex:1,padding:"9px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",fontSize:12,cursor:"pointer",textDecoration:"none",textAlign:"center"}}>
+                  🌐 TCGPlayer
+                </a>
+              </div>
+            </div>
+
+            {/* Status */}
+            <div style={{fontSize:12,color:"#475569",marginBottom:8}}>Estado</div>
+            <div style={{display:"flex",gap:8,marginBottom:14}}>
+              {Object.entries(INV_STATUS).map(([k,v])=>(
+                <button key={k} onClick={()=>chgSt(detail.id,k)} style={{flex:1,padding:"10px 4px",borderRadius:10,cursor:"pointer",border:"none",fontSize:11,fontWeight:600,background:detail.status===k?`${v.color}25`:"rgba(255,255,255,.05)",color:detail.status===k?v.color:"#64748b",outline:detail.status===k?`1.5px solid ${v.color}50`:"none"}}>
+                  {v.label}
+                </button>
+              ))}
+            </div>
+            <Btn variant="danger" onClick={()=>delC(detail.id)}>🗑 Eliminar</Btn>
+          </>);
+        })()}
       </Sheet>
 
       <Sheet open={showPrice} onClose={()=>setShowPrice(false)} title="PRECIO TCGMATCH" height="50vh">
