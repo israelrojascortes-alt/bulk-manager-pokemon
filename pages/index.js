@@ -1137,7 +1137,7 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
   useEffect(()=>{
     if (!detail) return;
     const existing = prices[detail.id];
-    if (existing?.tcg_clp_market || existing?.tcgmatch_clp) return; // already have price
+    if (existing?.tcg_clp_market || existing?.tcgmatch_clp) return;
     setAutoFetching(true);
     fetchPricesWithClaude([detail]).then(r=>{
       const p = r[0];
@@ -1152,6 +1152,25 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
     }).catch(()=>setAutoFetching(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[detail?.id]);
+
+  const refreshPrice = (card) => {
+    // Force re-fetch regardless of existing price
+    const updPrices = {...prices};
+    delete updPrices[card.id];
+    savePrices(updPrices);
+    setAutoFetching(true);
+    fetchPricesWithClaude([card]).then(r=>{
+      const p = r[0];
+      if (p?.clp) {
+        savePrices({...updPrices,[card.id]:{
+          source: p.src==="tcgplayer"?"tcg":"estimated",
+          tcg_clp_market: p.clp, tcg_market: p.usd,
+          confidence: p.conf, fetchedAt: today()
+        }});
+      }
+      setAutoFetching(false);
+    }).catch(()=>setAutoFetching(false));
+  };
 
   const addCard=()=>{if(!newCard.name.trim())return;setSaving(true);saveInv([{...newCard,id:uid(),addedAt:today(),status:"disponible",lotId:null,image:""},...inv]);setNewCard({name:"",set:"",number:"",rarity:"Common",language:"Spanish",condition:"Near Mint"});setShowAdd(false);setSaving(false);showToast("Carta agregada ✓");};
   const chgSt=async(id,s)=>{saveInv(inv.map(c=>c.id===id?{...c,status:s}:c));setDetail(p=>p?.id===id?{...p,status:s}:p);showToast("Estado actualizado");};
@@ -1218,23 +1237,43 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
             {/* PRICE SECTION */}
             <div style={{marginTop:16,marginBottom:14}}>
               {autoFetching ? (
-                // Loading state
                 <div style={{background:"rgba(250,204,21,.06)",border:"1px solid rgba(250,204,21,.15)",borderRadius:14,padding:20,textAlign:"center"}}>
                   <div style={{width:20,height:20,border:"2px solid rgba(250,204,21,.2)",borderTopColor:"#facc15",borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 10px"}}/>
                   <div style={{fontSize:12,color:"#64748b"}}>Buscando precio de mercado...</div>
                 </div>
               ) : marketClp ? (
-                // Has real price
                 <>
                   {/* Market price */}
                   <div style={{background:"rgba(13,17,23,.95)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:"14px 16px",marginBottom:10}}>
-                    <div style={{fontSize:11,color:"#475569",marginBottom:4}}>Precio de mercado</div>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div style={{fontFamily:"monospace",fontSize:22,color:"#e2e8f0",fontWeight:700}}>{fclp(marketClp)}</div>
-                      <span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:`${SRC[best.source]?.color}22`,color:SRC[best.source]?.color}}>{SRC[best.source]?.label}</span>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                      <div style={{fontSize:11,color:"#475569"}}>Precio de mercado</div>
+                      <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                        <span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:`${SRC[best.source]?.color}22`,color:SRC[best.source]?.color}}>{SRC[best.source]?.label}</span>
+                        <button onClick={()=>refreshPrice(detail)} style={{fontSize:9,padding:"2px 8px",borderRadius:5,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",cursor:"pointer"}}>↺ Actualizar</button>
+                      </div>
                     </div>
+                    <div style={{fontFamily:"monospace",fontSize:22,color:"#e2e8f0",fontWeight:700}}>{fclp(marketClp)}</div>
                     {p?.tcg_market&&<div style={{fontSize:10,color:"#475569",marginTop:2}}>US${p.tcg_market.toFixed(2)} · TCGPlayer</div>}
+                    {best.source==="est"&&<div style={{fontSize:10,color:"#fb923c",marginTop:2}}>⚠️ Estimado — sin precio real disponible</div>}
                   </div>
+
+                  {/* For JP cards with estimated price — show Scrydex prominently */}
+                  {detail.language==="Japanese" && best.source==="est" && sUrl && (
+                    <div style={{background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.3)",borderRadius:14,padding:14,marginBottom:10}}>
+                      <div style={{fontSize:11,color:"#facc15",fontWeight:700,marginBottom:8}}>💰 Ver precio real en Scrydex</div>
+                      <div style={{fontSize:12,color:"#64748b",marginBottom:10}}>El estimado puede no ser preciso para sets japoneses exclusivos. Abre Scrydex, copia el precio y guárdalo aquí.</div>
+                      <div style={{display:"flex",gap:8}}>
+                        <a href={sUrl} target="_blank" rel="noreferrer"
+                          style={{flex:2,display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"11px",background:"linear-gradient(135deg,#facc15,#f59e0b)",borderRadius:10,textDecoration:"none",fontWeight:700,fontSize:13,color:"#090d12"}}>
+                          🔗 Abrir Scrydex
+                        </a>
+                        <button onClick={()=>{setShowPrice(true);setManualPrice("");}}
+                          style={{flex:1,padding:"11px",background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.12)",color:"#e2e8f0",borderRadius:10,fontSize:13,cursor:"pointer"}}>
+                          ✏️ Ingresar precio
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Optimal selling price */}
                   <div style={{background:"linear-gradient(135deg,rgba(250,204,21,.12),rgba(245,158,11,.08))",border:"1px solid rgba(250,204,21,.3)",borderRadius:14,padding:"14px 16px",marginBottom:10}}>
@@ -1243,11 +1282,10 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
                       <div style={{fontFamily:"monospace",fontSize:26,color:"#facc15",fontWeight:700}}>{fclp(optimalClp)}</div>
                       <span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(250,204,21,.15)",color:"#facc15"}}>+8% mercado</span>
                     </div>
-                    <div style={{fontSize:10,color:"#64748b",marginTop:2}}>Rango sugerido: {fclp(marketClp)}–{fclp(Math.round(marketClp*1.2/100)*100)}</div>
+                    <div style={{fontSize:10,color:"#64748b",marginTop:2}}>Rango: {fclp(marketClp)} – {fclp(Math.round(marketClp*1.2/100)*100)}</div>
                   </div>
                 </>
               ) : (
-                // No price yet
                 <div style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:16,textAlign:"center"}}>
                   <div style={{fontSize:28,marginBottom:6}}>💭</div>
                   <div style={{fontFamily:"monospace",fontSize:18,color:"#facc15",fontWeight:700,marginBottom:2}}>{fclp(best.value)}</div>
@@ -1255,13 +1293,13 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
                 </div>
               )}
 
-              {/* Source buttons — compact, secondary */}
-              <div style={{display:"flex",gap:8,marginBottom:8}}>
+              {/* Source buttons — compact */}
+              <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>{setShowPrice(true);setManualPrice(p?.tcgmatch_clp||"");}}
                   style={{flex:1,padding:"9px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",fontSize:12,cursor:"pointer"}}>
-                  ✏️ tcgmatch.cl{hasTcgmatch?" ✓":""}
+                  ✏️ tcgmatch{hasTcgmatch?" ✓":""}
                 </button>
-                {detail.language==="Japanese"&&sUrl&&(
+                {(!detail.language==="Japanese"||best.source!=="est")&&sUrl&&(
                   <a href={sUrl} target="_blank" rel="noreferrer"
                     style={{flex:1,padding:"9px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",fontSize:12,cursor:"pointer",textDecoration:"none",textAlign:"center"}}>
                     🔗 Scrydex
