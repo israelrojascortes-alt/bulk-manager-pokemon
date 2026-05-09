@@ -690,29 +690,35 @@ function ScanTab({inv, saveInv, showToast}) {
       let results = [];
 
       if (language === "en") {
-        // pokemontcg.io for English
+        // pokemontcg.io for English — include tcgplayer prices
         const r = await fetch(
-          `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${query}"`)}&pageSize=12&select=id,name,set,rarity,images,types,number&orderBy=-set.releaseDate`,
+          `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${query}"`)}&pageSize=12&select=id,name,set,rarity,images,types,number,tcgplayer&orderBy=-set.releaseDate`,
           { headers: { "Accept":"application/json" } }
         );
         if (r.ok) {
           const d = await r.json();
-          results = (d.data||[]).map(c=>({
-            id: c.id, name: c.name, set: c.set?.name, setId: c.set?.id,
-            number: c.number, rarity: c.rarity,
-            image: c.images?.small, imageLarge: c.images?.large,
-            language: "English", source: "pokemontcgio",
-          }));
+          results = (d.data||[]).map(c=>{
+            const prices = c.tcgplayer?.prices;
+            const tier = prices?.holofoil||prices?.normal||prices?.reverseHolofoil||null;
+            const usd = tier?.market||tier?.mid||null;
+            return {
+              id: c.id, name: c.name, set: c.set?.name, setId: c.set?.id,
+              number: c.number, rarity: c.rarity,
+              image: c.images?.small, imageLarge: c.images?.large,
+              language: "English", source: "pokemontcgio",
+              usd, clp: usd ? Math.round(usd*950) : null,
+              priceSource: usd ? "TCGPlayer" : null,
+            };
+          });
         }
       } else {
-        // TCGdex for JP/ES/FR — search by name
+        // TCGdex for JP/ES/FR — price comes in detail response
         const r = await fetch(
           `https://api.tcgdex.net/v2/${language}/cards?name=${encodeURIComponent(query)}&pagination:limit=12`
         );
         if (r.ok) {
           const arr = await r.json();
           if (Array.isArray(arr)) {
-            // Fetch detail for each to get image
             const detailed = await Promise.all(
               arr.slice(0,10).map(async c => {
                 try {
@@ -723,19 +729,29 @@ function ScanTab({inv, saveInv, showToast}) {
               })
             );
             const langLabel = {ja:"Japanese",es:"Spanish",fr:"French"}[language]||language;
-            results = detailed.filter(Boolean).map(c=>({
-              id: c.id,
-              name: c.name,
-              set: c.set?.name || c.set?.id,
-              setId: c.set?.id,
-              number: c.localId,
-              rarity: c.rarity,
-              image: c.image ? c.image+"/low.webp" : null,
-              imageLarge: c.image ? c.image+"/high.webp" : null,
-              language: langLabel,
-              nativeName: language!=="en" ? c.name : null,
-              source: "tcgdex",
-            }));
+            results = detailed.filter(Boolean).map(c=>{
+              // Extract price from TCGdex pricing field
+              const pricing = c.pricing;
+              let usd=null, eur=null, priceSource=null;
+              if (pricing?.tcgplayer?.holofoil?.market || pricing?.tcgplayer?.normal?.market) {
+                usd = pricing.tcgplayer?.holofoil?.market||pricing.tcgplayer?.normal?.market;
+                priceSource = "TCGPlayer";
+              } else if (pricing?.cardmarket?.averageSellPrice||pricing?.cardmarket?.avg7) {
+                eur = pricing.cardmarket?.averageSellPrice||pricing.cardmarket?.avg7;
+                priceSource = "Cardmarket";
+              }
+              return {
+                id: c.id, name: c.name,
+                set: c.set?.name||c.set?.id, setId: c.set?.id,
+                number: c.localId, rarity: c.rarity,
+                image: c.image ? c.image+"/low.webp" : null,
+                imageLarge: c.image ? c.image+"/high.webp" : null,
+                language: langLabel, nativeName: language!=="en" ? c.name : null,
+                source: "tcgdex",
+                usd, eur, priceSource,
+                clp: usd ? Math.round(usd*950) : eur ? Math.round(eur*1050) : null,
+              };
+            });
           }
         }
       }
@@ -1074,11 +1090,21 @@ function ScanTab({inv, saveInv, showToast}) {
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:14,fontWeight:700,color:"#e2e8f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{result.name}</div>
                   <div style={{fontSize:11,color:"#475569",fontFamily:"monospace",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{result.set} · #{result.number}</div>
-                  <div style={{display:"flex",gap:4,marginTop:4}}>
+                  <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
                     {result.rarity&&<span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:`${r.color}20`,color:r.color}}>{r.label}</span>}
                     {result.setId&&<span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b",fontFamily:"monospace"}}>{result.setId}</span>}
-                    <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.04)",color:"#475569"}}>{result.language}</span>
                   </div>
+                  {/* Price */}
+                  {result.clp ? (
+                    <div style={{marginTop:5,display:"flex",gap:6,alignItems:"center"}}>
+                      <span style={{fontFamily:"monospace",fontSize:13,color:"#4ade80",fontWeight:700}}>{fclp(result.clp)}</span>
+                      <span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>
+                        {result.priceSource}{result.usd?` US$${result.usd.toFixed(2)}`:result.eur?` €${result.eur.toFixed(2)}`:""}
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={{marginTop:5,fontSize:10,color:"#475569"}}>Sin precio disponible</div>
+                  )}
                 </div>
                 <span style={{color:"#4ade80",fontSize:20,flexShrink:0}}>✓</span>
               </button>
