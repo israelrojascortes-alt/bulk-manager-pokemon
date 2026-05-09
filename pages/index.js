@@ -1210,10 +1210,12 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
           const r    = rd(detail.rarity);
           const p    = prices[detail.id];
           const best = getBestPrice(detail,prices);
-          const marketClp = p?.tcg_clp_market || p?.tcgmatch_clp || null;
-          const optimalClp = marketClp ? Math.round(marketClp * 1.08 / 100) * 100 : null; // 8% sobre mercado
+          const marketClp = p?.tcgmatch_clp || p?.tcg_clp_market || null;
+          const isEstimated = !p || p.source==="estimated" || p.source==="est" || (!p.tcgmatch_clp && p.confidence!=="h");
+          const optimalClp = marketClp ? Math.round(marketClp * 1.08 / 100) * 100 : null;
           const sUrl = detail.scrydexUrl || scrydexCardUrl(detail.officialName||detail.name, detail.set, detail.number);
           const hasTcgmatch = !!p?.tcgmatch_clp;
+          const showScrydexBlock = detail.language==="Japanese" && isEstimated && sUrl;
 
           return (<>
             {/* Card image */}
@@ -1254,11 +1256,11 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
                     </div>
                     <div style={{fontFamily:"monospace",fontSize:22,color:"#e2e8f0",fontWeight:700}}>{fclp(marketClp)}</div>
                     {p?.tcg_market&&<div style={{fontSize:10,color:"#475569",marginTop:2}}>US${p.tcg_market.toFixed(2)} · TCGPlayer</div>}
-                    {best.source==="est"&&<div style={{fontSize:10,color:"#fb923c",marginTop:2}}>⚠️ Estimado — sin precio real disponible</div>}
+                    {isEstimated&&<div style={{fontSize:10,color:"#fb923c",marginTop:2}}>⚠️ Estimado — sin precio real disponible</div>}
                   </div>
 
                   {/* For JP cards with estimated price — show Scrydex prominently */}
-                  {detail.language==="Japanese" && best.source==="est" && sUrl && (
+                  {showScrydexBlock && (
                     <div style={{background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.3)",borderRadius:14,padding:14,marginBottom:10}}>
                       <div style={{fontSize:11,color:"#facc15",fontWeight:700,marginBottom:8}}>💰 Ver precio real en Scrydex</div>
                       <div style={{fontSize:12,color:"#64748b",marginBottom:10}}>El estimado puede no ser preciso para sets japoneses exclusivos. Abre Scrydex, copia el precio y guárdalo aquí.</div>
@@ -1286,10 +1288,29 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
                   </div>
                 </>
               ) : (
-                <div style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:16,textAlign:"center"}}>
-                  <div style={{fontSize:28,marginBottom:6}}>💭</div>
-                  <div style={{fontFamily:"monospace",fontSize:18,color:"#facc15",fontWeight:700,marginBottom:2}}>{fclp(best.value)}</div>
-                  <div style={{fontSize:10,color:"#475569"}}>estimado por rareza</div>
+                <div style={{marginBottom:10}}>
+                  <div style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:16,textAlign:"center",marginBottom:showScrydexBlock?10:0}}>
+                    <div style={{fontSize:28,marginBottom:6}}>💭</div>
+                    <div style={{fontFamily:"monospace",fontSize:18,color:"#facc15",fontWeight:700,marginBottom:2}}>{fclp(best.value)}</div>
+                    <div style={{fontSize:10,color:"#475569"}}>estimado por rareza</div>
+                    {detail.language==="Japanese"&&<div style={{fontSize:10,color:"#fb923c",marginTop:4}}>⚠️ Set JP exclusivo — precio puede no ser preciso</div>}
+                  </div>
+                  {showScrydexBlock&&(
+                    <div style={{background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.3)",borderRadius:14,padding:14}}>
+                      <div style={{fontSize:12,color:"#facc15",fontWeight:700,marginBottom:6}}>💰 Ver precio real en Scrydex</div>
+                      <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>Abre Scrydex → copia el precio → vuelve e ingrésalo aquí.</div>
+                      <div style={{display:"flex",gap:8}}>
+                        <a href={sUrl} target="_blank" rel="noreferrer"
+                          style={{flex:2,display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"12px",background:"linear-gradient(135deg,#facc15,#f59e0b)",borderRadius:10,textDecoration:"none",fontWeight:700,fontSize:14,color:"#090d12"}}>
+                          🔗 Abrir Scrydex
+                        </a>
+                        <button onClick={()=>{setShowPrice(true);setManualPrice("");}}
+                          style={{flex:1,padding:"12px",background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.12)",color:"#e2e8f0",borderRadius:10,fontSize:13,cursor:"pointer"}}>
+                          ✏️ Ingresar
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1299,7 +1320,7 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
                   style={{flex:1,padding:"9px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",fontSize:12,cursor:"pointer"}}>
                   ✏️ tcgmatch{hasTcgmatch?" ✓":""}
                 </button>
-                {(!detail.language==="Japanese"||best.source!=="est")&&sUrl&&(
+                {detail.language==="Japanese" && sUrl && (
                   <a href={sUrl} target="_blank" rel="noreferrer"
                     style={{flex:1,padding:"9px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",fontSize:12,cursor:"pointer",textDecoration:"none",textAlign:"center"}}>
                     🔗 Scrydex
@@ -1326,11 +1347,30 @@ function StockTab({inv,prices,saveInv,savePrices,showToast}) {
         })()}
       </Sheet>
 
-      <Sheet open={showPrice} onClose={()=>setShowPrice(false)} title="PRECIO TCGMATCH" height="50vh">
+      <Sheet open={showPrice} onClose={()=>setShowPrice(false)} title="INGRESAR PRECIO" height="55vh">
         {detail&&(<>
-          <Inp label="Precio en CLP" type="number" placeholder="Ej: 3500" value={manualPrice} onChange={e=>setManualPrice(e.target.value)}/>
-          <a href={`https://tcgmatch.cl/cartas/pokemon?q=${encodeURIComponent(detail?.name||"")}`} target="_blank" rel="noreferrer" style={{display:"block",textAlign:"center",color:"#facc15",fontSize:13,marginBottom:14,textDecoration:"none"}}>🔗 Ver en tcgmatch.cl →</a>
-          <Btn onClick={()=>saveM(detail.id)}>GUARDAR</Btn>
+          <div style={{fontSize:12,color:"#64748b",marginBottom:14,lineHeight:1.6}}>
+            Puedes ingresar el precio en <strong style={{color:"#e2e8f0"}}>CLP</strong> o en <strong style={{color:"#e2e8f0"}}>USD</strong> (se convierte automáticamente a 950 CLP/USD).
+          </div>
+          <div style={{display:"flex",gap:8,marginBottom:6}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,color:"#64748b",marginBottom:5}}>Precio USD (ej: 282)</div>
+              <input type="number" placeholder="282" onChange={e=>{const v=parseFloat(e.target.value);if(v)setManualPrice(String(Math.round(v*950)));else setManualPrice("");}}
+                style={{...iStyle}}/>
+            </div>
+            <div style={{display:"flex",alignItems:"center",color:"#475569",fontSize:18,paddingTop:20}}>↔</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,color:"#64748b",marginBottom:5}}>Precio CLP</div>
+              <input type="number" placeholder="267900" value={manualPrice} onChange={e=>setManualPrice(e.target.value)}
+                style={{...iStyle, color:"#facc15"}}/>
+            </div>
+          </div>
+          {manualPrice&&<div style={{fontSize:12,color:"#4ade80",marginBottom:12,textAlign:"center"}}>= {fclp(parseInt(manualPrice)||0)}</div>}
+          {detail.language==="Japanese"&&sUrl&&(
+            <a href={sUrl} target="_blank" rel="noreferrer" style={{display:"block",textAlign:"center",color:"#facc15",fontSize:13,marginBottom:12,textDecoration:"none"}}>🔗 Ver precio en Scrydex →</a>
+          )}
+          <a href={`https://tcgmatch.cl/cartas/pokemon?q=${encodeURIComponent(detail?.name||"")}`} target="_blank" rel="noreferrer" style={{display:"block",textAlign:"center",color:"#64748b",fontSize:12,marginBottom:14,textDecoration:"none"}}>🔗 Ver en tcgmatch.cl →</a>
+          <Btn onClick={()=>saveM(detail.id)} disabled={!manualPrice}>GUARDAR PRECIO</Btn>
         </>)}
       </Sheet>
 
