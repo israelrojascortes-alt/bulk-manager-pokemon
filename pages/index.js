@@ -1492,7 +1492,7 @@ function CollectTab({inv}) {
   const [results, setResults]   = useState(null);
   const [loading, setLoading]   = useState(false);
   const [selected, setSelected] = useState(null);
-  const [langFilter, setLangFilter] = useState("all");
+  const [langFilter, setLangFilter] = useState("en");
 
   const LANGS = [{id:"all",flag:"🌍",label:"Todos"},{id:"en",flag:"🇺🇸",label:"EN"},{id:"ja",flag:"🇯🇵",label:"JP"},{id:"es",flag:"🇪🇸",label:"ES"}];
 
@@ -1505,6 +1505,7 @@ function CollectTab({inv}) {
     if (!query.trim()) return;
     setLoading(true); setResults(null); setSelected(null);
     setJpResults([]); setEsResults([]);
+    setLangFilter("en");
     const q = query.trim();
 
     // Load EN immediately
@@ -1673,12 +1674,30 @@ function CollectTab({inv}) {
 
               {/* Language filter */}
               <div style={{display:"flex",gap:6,marginBottom:14}}>
-                {LANGS.map(l=>(
-                  <button key={l.id} onClick={()=>setLangFilter(l.id)} style={{flex:1,padding:"8px 4px",borderRadius:10,cursor:"pointer",border:"none",fontSize:11,fontWeight:600,background:langFilter===l.id?"rgba(250,204,21,.15)":"rgba(255,255,255,.05)",color:langFilter===l.id?"#facc15":"#64748b",outline:langFilter===l.id?"1.5px solid rgba(250,204,21,.4)":"none"}}>
-                    {l.flag} {l.label}
-                  </button>
-                ))}
+                {LANGS.map(l=>{
+                  const count = l.id==="all"?allResults.length:allResults.filter(c=>c.language===(l.id==="en"?"English":l.id==="ja"?"Japanese":"Spanish")).length;
+                  const isLoading = (l.id==="ja"&&jpLoading)||(l.id==="es"&&esLoading);
+                  return (
+                    <button key={l.id} onClick={()=>setLangFilter(l.id)} style={{flex:1,padding:"8px 4px",borderRadius:10,cursor:"pointer",border:"none",fontSize:11,fontWeight:600,background:langFilter===l.id?"rgba(250,204,21,.15)":"rgba(255,255,255,.05)",color:langFilter===l.id?"#facc15":"#64748b",outline:langFilter===l.id?"1.5px solid rgba(250,204,21,.4)":"none",position:"relative"}}>
+                      {l.flag} {l.label}
+                      {isLoading
+                        ? <span style={{display:"block",fontSize:8,color:"#64748b",marginTop:1}}>cargando...</span>
+                        : count>0&&<span style={{display:"block",fontSize:8,color:langFilter===l.id?"#facc15":"#475569",marginTop:1}}>{count}</span>
+                      }
+                    </button>
+                  );
+                })}
               </div>
+
+              {/* Empty state for language filter */}
+              {filtered.length===0 && !jpLoading && !esLoading && (langFilter==="ja"||langFilter==="es") && (
+                <div style={{textAlign:"center",padding:24,color:"#475569",background:"rgba(255,255,255,.03)",borderRadius:14}}>
+                  <div style={{fontSize:24,marginBottom:8}}>{langFilter==="ja"?"🇯🇵":"🇪🇸"}</div>
+                  <div style={{fontSize:13,color:"#64748b",marginBottom:4}}>Sin cartas en {langFilter==="ja"?"japonés":"español"} para "{query}"</div>
+                  <div style={{fontSize:11,color:"#475569"}}>Este Pokémon puede no tener cartas en ese idioma en nuestra base de datos</div>
+                  <button onClick={()=>setLangFilter("en")} style={{marginTop:12,background:"rgba(250,204,21,.1)",border:"1px solid rgba(250,204,21,.2)",color:"#facc15",borderRadius:10,padding:"8px 16px",fontSize:12,cursor:"pointer"}}>Ver cartas EN →</button>
+                </div>
+              )}
 
               {/* Sets */}
               {Object.values(bySet).map(set=>(
