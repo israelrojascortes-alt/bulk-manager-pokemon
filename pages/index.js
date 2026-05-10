@@ -1529,65 +1529,48 @@ function CollectTab({inv}) {
     } catch { setResults([]); }
     setLoading(false);
 
-    // Load JP via Claude (knows full JP TCG catalog)
-    setJpLoading(true);
+    // Load JP + ES via single Claude call (more reliable)
+    setJpLoading(true); setEsLoading(true);
     try {
       const d = await callClaude({
-        max_tokens: 1500,
-        system: `You are a Pokémon TCG expert with complete knowledge of Japanese card sets.
-Return ONLY valid JSON array, no markdown:
-[{"name":"Japanese name in katakana","setName":"set name in English","setId":"sv8a","number":"059","rarity":"Rare Holo","image":null}]
-Include ALL Japanese cards for the requested Pokémon across ALL sets (sv1 through sv9, classic sets, promos).
-Use correct Japanese set codes: sv1S, sv1V, sv1a, sv2, sv2a, sv2b, sv3, sv3a, sv4, sv4a, sv4b, sv5, sv5a, sv5b, sv6, sv6a, sv7, sv7a, sv8, sv8a, sv8b, sv9, M4, etc.`,
-        messages:[{role:"user",content:`List all Japanese Pokémon TCG cards for: ${q}\nInclude set code, card number, rarity, and Japanese name (katakana).`}]
+        max_tokens: 2000,
+        system: `You are a Pokémon TCG expert. Return ONLY valid JSON, no markdown, no explanation.
+Format: {"jp":[{"name":"katakana name","setId":"sv8a","setName":"Terastal Festival ex","number":"049","rarity":"Rare Holo"}],"es":[{"name":"Spanish name","setId":"sv3","setName":"Obsidian Flames","number":"123","rarity":"Rare Holo"}]}
+For JP: include ALL Japanese sets where this Pokemon appears (sv1S through sv9, M4, classic sets).
+For ES: include European Spanish print cards.
+Use exact set codes. Be comprehensive.`,
+        messages:[{role:"user",content:`List ALL Japanese AND Spanish Pokémon TCG cards for: ${q}`}]
       });
-      const t = d.content?.find(b=>b.type==="text")?.text||"[]";
+      const t = d.content?.find(b=>b.type==="text")?.text||"{}";
       const parsed = robustJsonParse(t);
-      const arr = Array.isArray(parsed) ? parsed : (parsed.cards||[]);
-      const jpCards = arr.filter(Boolean).map((c,i)=>({
-        id:`ja_claude_${i}`,
-        name: c.name||q,
-        number: c.number||"?",
-        rarity: c.rarity||"?",
-        set:{ id:c.setId||"?", name:c.setName||c.setId||"?" },
+
+      const jpArr = parsed.jp || parsed.japanese || parsed.JP || [];
+      const esArr = parsed.es || parsed.spanish || parsed.ES || [];
+
+      setJpResults(jpArr.filter(Boolean).map((c,i)=>({
+        id:`ja_${i}`, name:c.name||q, number:c.number||"?", rarity:c.rarity||"?",
+        set:{id:c.setId||"?", name:c.setName||c.setId||"?"},
         images: c.setId&&c.number ? {
-          small: `https://assets.tcgdex.net/ja/${c.setId}/${c.number}/low.webp`,
-          large: `https://assets.tcgdex.net/ja/${c.setId}/${c.number}/high.webp`
+          small:`https://assets.tcgdex.net/ja/${c.setId}/${String(c.number).padStart(3,"0")}/low.webp`,
+          large:`https://assets.tcgdex.net/ja/${c.setId}/${String(c.number).padStart(3,"0")}/high.webp`
         } : null,
         language:"Japanese", usd:null, clp:null,
-        owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===c.name?.toLowerCase()&&i.language==="Japanese")
-      }));
-      setJpResults(jpCards);
-    } catch {}
-    setJpLoading(false);
+        owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===q.toLowerCase()&&i.language==="Japanese")
+      })));
 
-    // Load ES via Claude
-    setEsLoading(true);
-    try {
-      const d = await callClaude({
-        max_tokens: 800,
-        system: `You are a Pokémon TCG expert with knowledge of Spanish card sets.
-Return ONLY valid JSON array, no markdown:
-[{"name":"Spanish name","setName":"set name","setId":"sv3","number":"123","rarity":"Rare Holo"}]
-Include Spanish cards (Scarlet & Violet era and older sets with Spanish print runs).`,
-        messages:[{role:"user",content:`List Spanish Pokémon TCG cards for: ${q}`}]
-      });
-      const t = d.content?.find(b=>b.type==="text")?.text||"[]";
-      const parsed = robustJsonParse(t);
-      const arr = Array.isArray(parsed) ? parsed : (parsed.cards||[]);
-      const esCards = arr.filter(Boolean).map((c,i)=>({
-        id:`es_claude_${i}`,
-        name: c.name||q,
-        number: c.number||"?",
-        rarity: c.rarity||"?",
-        set:{ id:c.setId||"?", name:c.setName||c.setId||"?" },
+      setEsResults(esArr.filter(Boolean).map((c,i)=>({
+        id:`es_${i}`, name:c.name||q, number:c.number||"?", rarity:c.rarity||"?",
+        set:{id:c.setId||"?", name:c.setName||c.setId||"?"},
         images: null,
         language:"Spanish", usd:null, clp:null,
-        owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===c.name?.toLowerCase()&&i.language==="Spanish")
-      }));
-      setEsResults(esCards);
-    } catch {}
-    setEsLoading(false);
+        owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===q.toLowerCase()&&i.language==="Spanish")
+      })));
+    } catch(err) {
+      console.error("JP/ES error:", err);
+      // Show error in UI temporarily
+      setJpResults([{id:"error", name:`Error: ${err.message}`, number:"?", rarity:"?", set:{id:"?",name:"?"}, images:null, language:"Japanese", error:true}]);
+    }
+    setJpLoading(false); setEsLoading(false);
   };
 
   const allResults = [...(results||[]), ...jpResults, ...esResults];
