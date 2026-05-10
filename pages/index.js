@@ -566,7 +566,14 @@ export default function Home() {
   }, []);
 
   const sh = {inv,lots,sales,prices,saveInv,saveLots,saveSales,savePrices,showToast};
-  const NAV = [{id:"home",icon:"⚡",label:"Inicio"},{id:"scan",icon:"📷",label:"Scan"},{id:"stock",icon:"📦",label:"Stock"},{id:"lots",icon:"🧩",label:"Lotes"},{id:"sales",icon:"💰",label:"Ventas"}];
+  const NAV = [
+    {id:"home",  icon:"⚡", label:"Inicio"},
+    {id:"scan",  icon:"📷", label:"Scan"},
+    {id:"stock", icon:"📦", label:"Stock"},
+    {id:"lots",  icon:"🧩", label:"Lotes"},
+    {id:"sales", icon:"💰", label:"Ventas"},
+    {id:"collect",icon:"🎯",label:"Colección"},
+  ];
 
   if (loading) return (
     <div style={{minHeight:"100vh",background:"#090d12",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
@@ -588,11 +595,12 @@ export default function Home() {
       </Head>
 
       <div style={{minHeight:"100vh",background:"#090d12",paddingBottom:72}}>
-        {tab==="home"  && <HomeTab  {...sh} setTab={setTab}/>}
-        {tab==="scan"  && <ScanTab  {...sh}/>}
-        {tab==="stock" && <StockTab {...sh}/>}
-        {tab==="lots"  && <LotsTab  {...sh}/>}
-        {tab==="sales" && <SalesTab {...sh}/>}
+        {tab==="home"    && <HomeTab    {...sh} setTab={setTab}/>}
+        {tab==="scan"    && <ScanTab    {...sh}/>}
+        {tab==="stock"   && <StockTab   {...sh}/>}
+        {tab==="lots"    && <LotsTab    {...sh}/>}
+        {tab==="sales"   && <SalesTab   {...sh}/>}
+        {tab==="collect" && <CollectTab {...sh}/>}
       </div>
 
       <nav style={{position:"fixed",bottom:0,left:0,right:0,height:68,background:"rgba(9,13,18,.98)",borderTop:"1px solid rgba(250,204,21,.12)",display:"flex",zIndex:100,backdropFilter:"blur(20px)"}}>
@@ -1472,6 +1480,201 @@ function SalesTab({lots,sales,saveLots,saveSales,showToast}) {
           <Btn onClick={regSale} disabled={saving||!form.salePrice}>{saving?"GUARDANDO...":"💰 CONFIRMAR VENTA"}</Btn>
         </>)}
       </Sheet>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  COLLECTION TAB — Busca un Pokémon y ve todas sus cartas
+// ═══════════════════════════════════════════════════════════════════
+function CollectTab({inv}) {
+  const [query, setQuery]       = useState("");
+  const [results, setResults]   = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [langFilter, setLangFilter] = useState("all");
+
+  const LANGS = [{id:"all",flag:"🌍",label:"Todos"},{id:"en",flag:"🇺🇸",label:"EN"},{id:"ja",flag:"🇯🇵",label:"JP"},{id:"es",flag:"🇪🇸",label:"ES"}];
+
+  const search = async () => {
+    if (!query.trim()) return;
+    setLoading(true); setResults(null); setSelected(null);
+    try {
+      // Search pokemontcg.io for all appearances
+      const r = await fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${query.trim()}"`)}&pageSize=50&select=id,name,set,rarity,images,types,number,tcgplayer&orderBy=-set.releaseDate`,
+        { headers: { "Accept":"application/json" } }
+      );
+      const d = await r.json();
+      const cards = (d.data||[]).map(c => {
+        const prices = c.tcgplayer?.prices;
+        const tier = prices?.holofoil||prices?.normal||prices?.reverseHolofoil||null;
+        const usd = tier?.market||tier?.mid||null;
+        // Check if user already has this card
+        const owned = inv.some(i =>
+          (i.officialName||i.name)?.toLowerCase()===c.name?.toLowerCase() &&
+          (i.set||i.officialSet)?.toLowerCase().includes(c.set?.id?.toLowerCase()||"")
+        );
+        return { ...c, usd, clp: usd?Math.round(usd*950):null, owned };
+      });
+      setResults(cards);
+    } catch { setResults([]); }
+    setLoading(false);
+  };
+
+  const filtered = results?.filter(c => {
+    if (langFilter==="all") return true;
+    if (langFilter==="en") return !c.set?.id?.includes("_ja")&&!c.set?.id?.includes("_es");
+    if (langFilter==="ja") return c.set?.id?.includes("_ja")||c.set?.name?.includes("Japanese");
+    if (langFilter==="es") return c.set?.id?.includes("_es")||c.set?.name?.includes("Spanish");
+    return true;
+  }) || [];
+
+  // Group by set
+  const bySet = {};
+  filtered.forEach(c => {
+    const key = c.set?.id||"?";
+    if (!bySet[key]) bySet[key] = { name:c.set?.name||key, id:key, cards:[] };
+    bySet[key].cards.push(c);
+  });
+
+  const owned   = results?.filter(c=>c.owned).length || 0;
+  const total   = results?.length || 0;
+  const rarities = results ? [...new Set(results.map(c=>rd(c.rarity).label))].sort() : [];
+
+  return (
+    <div style={{padding:"52px 16px 16px"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:2,color:"#facc15",marginBottom:2}}>🎯 ARMAR COLECCIÓN</div>
+      <div style={{fontSize:12,color:"#475569",marginBottom:20}}>Busca un Pokémon y ve todas sus cartas</div>
+
+      {/* Search */}
+      <div style={{display:"flex",gap:8,marginBottom:14}}>
+        <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==="Enter"&&search()}
+          placeholder="Ej: Gengar, Pikachu, Mewtwo..."
+          style={{...iStyle,flex:1}}/>
+        <button onClick={search} disabled={loading||!query.trim()} style={{background:"linear-gradient(135deg,#facc15,#f59e0b)",color:"#090d12",border:"none",borderRadius:10,padding:"0 18px",fontSize:15,fontWeight:700,cursor:"pointer",flexShrink:0}}>
+          {loading?"...":"🔍"}
+        </button>
+      </div>
+
+      {/* Loading */}
+      {loading && (
+        <div style={{textAlign:"center",padding:32}}>
+          <div style={{width:24,height:24,border:"3px solid rgba(250,204,21,.2)",borderTopColor:"#facc15",borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/>
+          <div style={{fontSize:13,color:"#64748b"}}>Buscando en todas las ediciones...</div>
+        </div>
+      )}
+
+      {/* Results summary */}
+      {results && !loading && (
+        <>
+          {results.length===0 ? (
+            <div style={{textAlign:"center",padding:32,color:"#475569"}}>
+              <div style={{fontSize:32,marginBottom:8}}>🤔</div>
+              No se encontró "{query}" — prueba con el nombre en inglés
+            </div>
+          ) : (
+            <>
+              {/* Stats */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
+                {[
+                  {l:"Ediciones",v:Object.keys(bySet).length,c:"#facc15"},
+                  {l:"Cartas totales",v:total,c:"#60a5fa"},
+                  {l:"Ya tienes",v:owned,c:"#4ade80"},
+                ].map(s=>(
+                  <div key={s.l} style={{background:"rgba(13,17,23,.95)",border:`1px solid ${s.c}22`,borderRadius:12,padding:"12px 8px",textAlign:"center"}}>
+                    <div style={{fontFamily:"monospace",fontSize:18,color:s.c,fontWeight:700}}>{s.v}</div>
+                    <div style={{fontSize:10,color:"#475569",marginTop:2}}>{s.l}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Progress bar */}
+              {owned>0&&(
+                <div style={{marginBottom:14,background:"rgba(13,17,23,.95)",border:"1px solid rgba(74,222,128,.2)",borderRadius:12,padding:"12px 14px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:6}}>
+                    <span style={{color:"#64748b"}}>Progreso colección</span>
+                    <span style={{color:"#4ade80",fontWeight:700}}>{owned}/{total} ({Math.round(owned/total*100)}%)</span>
+                  </div>
+                  <div style={{height:6,background:"rgba(255,255,255,.06)",borderRadius:3}}>
+                    <div style={{width:`${Math.round(owned/total*100)}%`,height:"100%",background:"linear-gradient(90deg,#4ade80,#22d3ee)",borderRadius:3}}/>
+                  </div>
+                </div>
+              )}
+
+              {/* Language filter */}
+              <div style={{display:"flex",gap:6,marginBottom:14}}>
+                {LANGS.map(l=>(
+                  <button key={l.id} onClick={()=>setLangFilter(l.id)} style={{flex:1,padding:"8px 4px",borderRadius:10,cursor:"pointer",border:"none",fontSize:11,fontWeight:600,background:langFilter===l.id?"rgba(250,204,21,.15)":"rgba(255,255,255,.05)",color:langFilter===l.id?"#facc15":"#64748b",outline:langFilter===l.id?"1.5px solid rgba(250,204,21,.4)":"none"}}>
+                    {l.flag} {l.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Sets */}
+              {Object.values(bySet).map(set=>(
+                <div key={set.id} style={{marginBottom:16}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:700,color:"#e2e8f0"}}>{set.name}</div>
+                      <div style={{fontSize:10,color:"#475569",fontFamily:"monospace"}}>{set.id} · {set.cards.length} carta{set.cards.length!==1?"s":""}</div>
+                    </div>
+                    {set.cards.some(c=>c.owned)&&(
+                      <span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>
+                        ✓ {set.cards.filter(c=>c.owned).length}/{set.cards.length}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                    {set.cards.map(card=>{
+                      const r=rd(card.rarity);
+                      return (
+                        <button key={card.id} onClick={()=>setSelected(card===selected?null:card)}
+                          style={{display:"flex",gap:10,padding:"10px 12px",background:card.owned?"rgba(74,222,128,.06)":"rgba(13,17,23,.95)",border:`1px solid ${card.owned?"rgba(74,222,128,.2)":r.color+"22"}`,borderRadius:12,cursor:"pointer",textAlign:"left",alignItems:"center",width:"100%"}}>
+                          {card.images?.small
+                            ? <img src={card.images.small} alt={card.name} style={{width:44,borderRadius:5,flexShrink:0}} onError={e=>e.target.style.display="none"}/>
+                            : <div style={{width:44,height:61,borderRadius:5,background:`${r.color}15`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:18}}>🃏</span></div>
+                          }
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:14,fontWeight:700,color:card.owned?"#4ade80":"#e2e8f0"}}>{card.name} {card.owned&&"✓"}</div>
+                            <div style={{fontSize:11,color:"#475569",fontFamily:"monospace",marginTop:1}}>#{card.number}</div>
+                            <div style={{display:"flex",gap:4,marginTop:4}}>
+                              <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:`${r.color}20`,color:r.color}}>{r.label}</span>
+                              {card.owned&&<span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>En inventario</span>}
+                            </div>
+                          </div>
+                          <div style={{textAlign:"right",flexShrink:0}}>
+                            {card.clp
+                              ? <><div style={{fontFamily:"monospace",fontSize:13,color:"#4ade80",fontWeight:700}}>{fclp(card.clp)}</div><div style={{fontSize:9,color:"#475569"}}>TCGPlayer</div></>
+                              : <div style={{fontSize:10,color:"#475569"}}>sin precio</div>
+                            }
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </>
+      )}
+
+      {/* Empty state */}
+      {!results && !loading && (
+        <div style={{textAlign:"center",padding:48,color:"#475569",opacity:.6}}>
+          <div style={{fontSize:48,marginBottom:12}}>🎯</div>
+          <div style={{fontSize:16,fontWeight:600,color:"#94a3b8",marginBottom:8}}>Busca tu Pokémon favorito</div>
+          <div style={{fontSize:13}}>Ver en qué sets aparece, qué versiones existen y cuáles ya tienes</div>
+          <div style={{marginTop:20,display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+            {["Gengar","Charizard","Mewtwo","Pikachu","Umbreon","Togekiss"].map(p=>(
+              <button key={p} onClick={()=>{setQuery(p);}} style={{padding:"8px 14px",borderRadius:20,background:"rgba(250,204,21,.08)",border:"1px solid rgba(250,204,21,.2)",color:"#facc15",fontSize:12,cursor:"pointer"}}>
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
