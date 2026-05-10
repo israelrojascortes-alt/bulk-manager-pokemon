@@ -1500,33 +1500,67 @@ function CollectTab({inv}) {
     if (!query.trim()) return;
     setLoading(true); setResults(null); setSelected(null);
     try {
-      // Search pokemontcg.io for all appearances
-      const r = await fetch(
-        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${query.trim()}"`)}&pageSize=50&select=id,name,set,rarity,images,types,number,tcgplayer&orderBy=-set.releaseDate`,
+      const q = query.trim();
+
+      // Search EN (pokemontcg.io)
+      const enFetch = fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${q}"`)}&pageSize=50&select=id,name,set,rarity,images,types,number,tcgplayer&orderBy=-set.releaseDate`,
         { headers: { "Accept":"application/json" } }
-      );
-      const d = await r.json();
-      const cards = (d.data||[]).map(c => {
+      ).then(r=>r.ok?r.json():{data:[]}).catch(()=>({data:[]}));
+
+      // Search JP and ES (TCGdex) in parallel
+      const tcgFetch = async (lang) => {
+        try {
+          const r = await fetch(`https://api.tcgdex.net/v2/${lang}/cards?name=${encodeURIComponent(q)}&pagination:limit=30`);
+          if (!r.ok) return [];
+          const arr = await r.json();
+          if (!Array.isArray(arr)) return [];
+          // Fetch detail for image + pricing
+          const details = await Promise.all(arr.slice(0,20).map(async c=>{
+            try { const dr=await fetch(`https://api.tcgdex.net/v2/${lang}/cards/${c.id}`); if(dr.ok)return dr.json(); } catch {}
+            return c;
+          }));
+          return details.filter(Boolean).map(c=>({
+            id:`${lang}_${c.id}`,
+            name: c.name,
+            number: c.localId,
+            rarity: c.rarity,
+            set: { id: c.set?.id||"?", name: c.set?.name||c.set?.id||"?" },
+            images: c.image ? { small: c.image+"/low.webp", large: c.image+"/high.webp" } : null,
+            language: lang==="ja"?"Japanese":"Spanish",
+            usd: null, clp: null, // TCGdex pricing often missing for JP/ES
+          }));
+        } catch { return []; }
+      };
+
+      const [enData, jpCards, esCards] = await Promise.all([enFetch, tcgFetch("ja"), tcgFetch("es")]);
+
+      const enCards = (enData.data||[]).map(c=>{
         const prices = c.tcgplayer?.prices;
         const tier = prices?.holofoil||prices?.normal||prices?.reverseHolofoil||null;
         const usd = tier?.market||tier?.mid||null;
-        // Check if user already has this card
-        const owned = inv.some(i =>
-          (i.officialName||i.name)?.toLowerCase()===c.name?.toLowerCase() &&
-          (i.set||i.officialSet)?.toLowerCase().includes(c.set?.id?.toLowerCase()||"")
-        );
-        return { ...c, usd, clp: usd?Math.round(usd*950):null, owned };
+        return { ...c, language:"English", usd, clp: usd?Math.round(usd*950):null };
       });
-      setResults(cards);
+
+      const allCards = [...enCards, ...jpCards, ...esCards].map(c=>({
+        ...c,
+        owned: inv.some(i=>
+          (i.officialName||i.name)?.toLowerCase()===c.name?.toLowerCase() &&
+          (i.language==="Japanese"?"ja":i.language==="Spanish"?"es":"en")===
+          (c.language==="Japanese"?"ja":c.language==="Spanish"?"es":"en")
+        )
+      }));
+
+      setResults(allCards);
     } catch { setResults([]); }
     setLoading(false);
   };
 
   const filtered = results?.filter(c => {
     if (langFilter==="all") return true;
-    if (langFilter==="en") return !c.set?.id?.includes("_ja")&&!c.set?.id?.includes("_es");
-    if (langFilter==="ja") return c.set?.id?.includes("_ja")||c.set?.name?.includes("Japanese");
-    if (langFilter==="es") return c.set?.id?.includes("_es")||c.set?.name?.includes("Spanish");
+    if (langFilter==="en") return c.language==="English";
+    if (langFilter==="ja") return c.language==="Japanese";
+    if (langFilter==="es") return c.language==="Spanish";
     return true;
   }) || [];
 
@@ -1638,9 +1672,12 @@ function CollectTab({inv}) {
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:14,fontWeight:700,color:card.owned?"#4ade80":"#e2e8f0"}}>{card.name} {card.owned&&"✓"}</div>
                             <div style={{fontSize:11,color:"#475569",fontFamily:"monospace",marginTop:1}}>#{card.number}</div>
-                            <div style={{display:"flex",gap:4,marginTop:4}}>
+                            <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap"}}>
                               <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:`${r.color}20`,color:r.color}}>{r.label}</span>
-                              {card.owned&&<span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>En inventario</span>}
+                              <span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,.06)",color:"#64748b"}}>
+                                {card.language==="Japanese"?"🇯🇵 JP":card.language==="Spanish"?"🇪🇸 ES":"🇺🇸 EN"}
+                              </span>
+                              {card.owned&&<span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:"rgba(74,222,128,.12)",color:"#4ade80"}}>✓ Tienes</span>}
                             </div>
                           </div>
                           <div style={{textAlign:"right",flexShrink:0}}>
