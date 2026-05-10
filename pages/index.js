@@ -1496,86 +1496,102 @@ function CollectTab({inv}) {
 
   const LANGS = [{id:"all",flag:"🌍",label:"Todos"},{id:"en",flag:"🇺🇸",label:"EN"},{id:"ja",flag:"🇯🇵",label:"JP"},{id:"es",flag:"🇪🇸",label:"ES"}];
 
+  const [jpResults, setJpResults]   = useState([]);
+  const [esResults, setEsResults]   = useState([]);
+  const [jpLoading, setJpLoading]   = useState(false);
+  const [esLoading, setEsLoading]   = useState(false);
+
   const search = async () => {
     if (!query.trim()) return;
     setLoading(true); setResults(null); setSelected(null);
-    try {
-      const q = query.trim();
+    setJpResults([]); setEsResults([]);
+    const q = query.trim();
 
-      // 1. Search pokemontcg.io for EN cards
-      const enFetch = fetch(
+    // Load EN immediately
+    try {
+      const r = await fetch(
         `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${q}"`)}&pageSize=50&select=id,name,set,rarity,images,types,number,tcgplayer&orderBy=-set.releaseDate`,
         { headers: { "Accept":"application/json" } }
-      ).then(r=>r.ok?r.json():{data:[]}).catch(()=>({data:[]}));
-
-      // 2. Search TCGdex EN to get card IDs, then fetch JP/ES versions
-      const tcgdexEnFetch = fetch(
-        `https://api.tcgdex.net/v2/en/cards?name=${encodeURIComponent(q)}&pagination:limit=30`
-      ).then(r=>r.ok?r.json():[]).catch(()=>[]);
-
-      const [enData, tcgdexIds] = await Promise.all([enFetch, tcgdexEnFetch]);
-
-      // EN cards from pokemontcg.io
-      const enCards = (enData.data||[]).map(c => {
+      );
+      const d = await r.json();
+      const enCards = (d.data||[]).map(c => {
         const prices = c.tcgplayer?.prices;
         const tier = prices?.holofoil||prices?.normal||prices?.reverseHolofoil||null;
         const usd = tier?.market||tier?.mid||null;
-        return { ...c, language:"English", usd, clp: usd?Math.round(usd*950):null };
+        return { ...c, language:"English", usd, clp: usd?Math.round(usd*950):null,
+          owned: inv.some(i=>(i.officialName||i.name)?.toLowerCase()===c.name?.toLowerCase()&&(i.language||"English")==="English")
+        };
       });
-
-      // For each TCGdex card ID, fetch JP and ES versions in parallel
-      const ids = Array.isArray(tcgdexIds) ? tcgdexIds.slice(0,20).map(c=>c.id).filter(Boolean) : [];
-
-      const fetchLang = async (lang, ids) => {
-        const cards = await Promise.all(ids.map(async id => {
-          try {
-            const r = await fetch(`https://api.tcgdex.net/v2/${lang}/cards/${id}`);
-            if (!r.ok) return null;
-            const d = await r.json();
-            if (!d?.name) return null;
-            return {
-              id: `${lang}_${id}`,
-              name: d.name,
-              number: d.localId,
-              rarity: d.rarity,
-              set: { id: d.set?.id||"?", name: d.set?.name||d.set?.id||"?" },
-              images: d.image ? { small: d.image+"/low.webp", large: d.image+"/high.webp" } : null,
-              language: lang==="ja" ? "Japanese" : "Spanish",
-              usd: null, clp: null,
-            };
-          } catch { return null; }
-        }));
-        return cards.filter(Boolean);
-      };
-
-      const [jpCards, esCards] = await Promise.all([
-        fetchLang("ja", ids),
-        fetchLang("es", ids),
-      ]);
-
-      const allCards = [...enCards, ...jpCards, ...esCards].map(c => ({
-        ...c,
-        owned: inv.some(i => {
-          const iName = (i.officialName||i.name||"").toLowerCase();
-          const cName = (c.name||"").toLowerCase();
-          const iLang = i.language==="Japanese"?"ja":i.language==="Spanish"?"es":"en";
-          const cLang = c.language==="Japanese"?"ja":c.language==="Spanish"?"es":"en";
-          return iName===cName && iLang===cLang;
-        })
-      }));
-
-      setResults(allCards);
+      setResults(enCards);
     } catch { setResults([]); }
     setLoading(false);
+
+    // Load JP in background
+    setJpLoading(true);
+    try {
+      const r = await fetch(`https://api.tcgdex.net/v2/en/cards?name=${encodeURIComponent(q)}&pagination:limit=15`);
+      if (r.ok) {
+        const ids = await r.json();
+        if (Array.isArray(ids) && ids.length) {
+          // Batch fetch JP — limit to 8 to avoid timeout
+          const jpCards = await Promise.all(ids.slice(0,8).map(async c=>{
+            try {
+              const dr = await fetch(`https://api.tcgdex.net/v2/ja/cards/${c.id}`);
+              if (!dr.ok) return null;
+              const d = await dr.json();
+              if (!d?.name||!d?.image) return null;
+              return { id:`ja_${c.id}`, name:d.name, number:d.localId, rarity:d.rarity,
+                set:{id:d.set?.id||"?",name:d.set?.name||d.set?.id||"?"},
+                images:{small:d.image+"/low.webp",large:d.image+"/high.webp"},
+                language:"Japanese", usd:null, clp:null,
+                owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===d.name?.toLowerCase()&&i.language==="Japanese")
+              };
+            } catch { return null; }
+          }));
+          setJpResults(jpCards.filter(Boolean));
+        }
+      }
+    } catch {}
+    setJpLoading(false);
+
+    // Load ES in background
+    setEsLoading(true);
+    try {
+      const r = await fetch(`https://api.tcgdex.net/v2/en/cards?name=${encodeURIComponent(q)}&pagination:limit=15`);
+      if (r.ok) {
+        const ids = await r.json();
+        if (Array.isArray(ids) && ids.length) {
+          const esCards = await Promise.all(ids.slice(0,8).map(async c=>{
+            try {
+              const dr = await fetch(`https://api.tcgdex.net/v2/es/cards/${c.id}`);
+              if (!dr.ok) return null;
+              const d = await dr.json();
+              if (!d?.name||!d?.image) return null;
+              return { id:`es_${c.id}`, name:d.name, number:d.localId, rarity:d.rarity,
+                set:{id:d.set?.id||"?",name:d.set?.name||d.set?.id||"?"},
+                images:{small:d.image+"/low.webp",large:d.image+"/high.webp"},
+                language:"Spanish", usd:null, clp:null,
+                owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===d.name?.toLowerCase()&&i.language==="Spanish")
+              };
+            } catch { return null; }
+          }));
+          setEsResults(esCards.filter(Boolean));
+        }
+      }
+    } catch {}
+    setEsLoading(false);
   };
 
-  const filtered = results?.filter(c => {
+  const allResults = [...(results||[]), ...jpResults, ...esResults];
+
+  const filtered = allResults.filter(c => {
     if (langFilter==="all") return true;
     if (langFilter==="en") return c.language==="English";
     if (langFilter==="ja") return c.language==="Japanese";
     if (langFilter==="es") return c.language==="Spanish";
     return true;
-  }) || [];
+  });
+
 
   // Group by set
   const bySet = {};
@@ -1626,8 +1642,8 @@ function CollectTab({inv}) {
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
                 {[
                   {l:"Ediciones",v:Object.keys(bySet).length,c:"#facc15"},
-                  {l:"Cartas totales",v:total,c:"#60a5fa"},
-                  {l:"Ya tienes",v:owned,c:"#4ade80"},
+                  {l:"Cartas totales",v:allResults.length,c:"#60a5fa"},
+                  {l:"Ya tienes",v:allResults.filter(c=>c.owned).length,c:"#4ade80"},
                 ].map(s=>(
                   <div key={s.l} style={{background:"rgba(13,17,23,.95)",border:`1px solid ${s.c}22`,borderRadius:12,padding:"12px 8px",textAlign:"center"}}>
                     <div style={{fontFamily:"monospace",fontSize:18,color:s.c,fontWeight:700}}>{s.v}</div>
@@ -1635,16 +1651,23 @@ function CollectTab({inv}) {
                   </div>
                 ))}
               </div>
+              {/* JP/ES loading status */}
+              {(jpLoading||esLoading)&&(
+                <div style={{display:"flex",gap:6,marginBottom:12}}>
+                  {jpLoading&&<div style={{display:"flex",alignItems:"center",gap:4,padding:"4px 10px",borderRadius:8,background:"rgba(255,255,255,.05)",fontSize:11,color:"#64748b"}}><div style={{width:8,height:8,border:"1.5px solid #64748b",borderTopColor:"#facc15",borderRadius:"50%",animation:"spin .7s linear infinite"}}/> 🇯🇵 Cargando JP...</div>}
+                  {esLoading&&<div style={{display:"flex",alignItems:"center",gap:4,padding:"4px 10px",borderRadius:8,background:"rgba(255,255,255,.05)",fontSize:11,color:"#64748b"}}><div style={{width:8,height:8,border:"1.5px solid #64748b",borderTopColor:"#facc15",borderRadius:"50%",animation:"spin .7s linear infinite"}}/> 🇪🇸 Cargando ES...</div>}
+                </div>
+              )}
 
               {/* Progress bar */}
-              {owned>0&&(
+              {allResults.filter(c=>c.owned).length>0&&(
                 <div style={{marginBottom:14,background:"rgba(13,17,23,.95)",border:"1px solid rgba(74,222,128,.2)",borderRadius:12,padding:"12px 14px"}}>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:6}}>
                     <span style={{color:"#64748b"}}>Progreso colección</span>
-                    <span style={{color:"#4ade80",fontWeight:700}}>{owned}/{total} ({Math.round(owned/total*100)}%)</span>
+                    <span style={{color:"#4ade80",fontWeight:700}}>{allResults.filter(c=>c.owned).length}/{allResults.length} ({Math.round(allResults.filter(c=>c.owned).length/allResults.length*100)}%)</span>
                   </div>
                   <div style={{height:6,background:"rgba(255,255,255,.06)",borderRadius:3}}>
-                    <div style={{width:`${Math.round(owned/total*100)}%`,height:"100%",background:"linear-gradient(90deg,#4ade80,#22d3ee)",borderRadius:3}}/>
+                    <div style={{width:`${Math.round(allResults.filter(c=>c.owned).length/allResults.length*100)}%`,height:"100%",background:"linear-gradient(90deg,#4ade80,#22d3ee)",borderRadius:3}}/>
                   </div>
                 </div>
               )}
