@@ -1527,57 +1527,63 @@ function CollectTab({inv}) {
     } catch { setResults([]); }
     setLoading(false);
 
-    // Load JP in background
+    // Load JP via Claude (knows full JP TCG catalog)
     setJpLoading(true);
     try {
-      const r = await fetch(`/api/tcgdex?path=${encodeURIComponent(`en/cards?name=${encodeURIComponent(q)}&pagination:limit=15`)}`);
-      if (r.ok) {
-        const ids = await r.json();
-        if (Array.isArray(ids) && ids.length) {
-          const jpCards = await Promise.all(ids.slice(0,8).map(async c=>{
-            try {
-              const dr = await fetch(`/api/tcgdex?path=${encodeURIComponent(`ja/cards/${c.id}`)}`);
-              if (!dr.ok) return null;
-              const d = await dr.json();
-              if (!d?.name||!d?.image) return null;
-              return { id:`ja_${c.id}`, name:d.name, number:d.localId, rarity:d.rarity,
-                set:{id:d.set?.id||"?",name:d.set?.name||d.set?.id||"?"},
-                images:{small:d.image+"/low.webp",large:d.image+"/high.webp"},
-                language:"Japanese", usd:null, clp:null,
-                owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===d.name?.toLowerCase()&&i.language==="Japanese")
-              };
-            } catch { return null; }
-          }));
-          setJpResults(jpCards.filter(Boolean));
-        }
-      }
+      const d = await callClaude({
+        max_tokens: 1500,
+        system: `You are a Pokémon TCG expert with complete knowledge of Japanese card sets.
+Return ONLY valid JSON array, no markdown:
+[{"name":"Japanese name in katakana","setName":"set name in English","setId":"sv8a","number":"059","rarity":"Rare Holo","image":null}]
+Include ALL Japanese cards for the requested Pokémon across ALL sets (sv1 through sv9, classic sets, promos).
+Use correct Japanese set codes: sv1S, sv1V, sv1a, sv2, sv2a, sv2b, sv3, sv3a, sv4, sv4a, sv4b, sv5, sv5a, sv5b, sv6, sv6a, sv7, sv7a, sv8, sv8a, sv8b, sv9, M4, etc.`,
+        messages:[{role:"user",content:`List all Japanese Pokémon TCG cards for: ${q}\nInclude set code, card number, rarity, and Japanese name (katakana).`}]
+      });
+      const t = d.content?.find(b=>b.type==="text")?.text||"[]";
+      const parsed = robustJsonParse(t);
+      const arr = Array.isArray(parsed) ? parsed : (parsed.cards||[]);
+      const jpCards = arr.filter(Boolean).map((c,i)=>({
+        id:`ja_claude_${i}`,
+        name: c.name||q,
+        number: c.number||"?",
+        rarity: c.rarity||"?",
+        set:{ id:c.setId||"?", name:c.setName||c.setId||"?" },
+        images: c.setId&&c.number ? {
+          small: `https://assets.tcgdex.net/ja/${c.setId}/${c.number}/low.webp`,
+          large: `https://assets.tcgdex.net/ja/${c.setId}/${c.number}/high.webp`
+        } : null,
+        language:"Japanese", usd:null, clp:null,
+        owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===c.name?.toLowerCase()&&i.language==="Japanese")
+      }));
+      setJpResults(jpCards);
     } catch {}
     setJpLoading(false);
 
-    // Load ES in background
+    // Load ES via Claude
     setEsLoading(true);
     try {
-      const r = await fetch(`/api/tcgdex?path=${encodeURIComponent(`en/cards?name=${encodeURIComponent(q)}&pagination:limit=15`)}`);
-      if (r.ok) {
-        const ids = await r.json();
-        if (Array.isArray(ids) && ids.length) {
-          const esCards = await Promise.all(ids.slice(0,8).map(async c=>{
-            try {
-              const dr = await fetch(`/api/tcgdex?path=${encodeURIComponent(`es/cards/${c.id}`)}`);
-              if (!dr.ok) return null;
-              const d = await dr.json();
-              if (!d?.name||!d?.image) return null;
-              return { id:`es_${c.id}`, name:d.name, number:d.localId, rarity:d.rarity,
-                set:{id:d.set?.id||"?",name:d.set?.name||d.set?.id||"?"},
-                images:{small:d.image+"/low.webp",large:d.image+"/high.webp"},
-                language:"Spanish", usd:null, clp:null,
-                owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===d.name?.toLowerCase()&&i.language==="Spanish")
-              };
-            } catch { return null; }
-          }));
-          setEsResults(esCards.filter(Boolean));
-        }
-      }
+      const d = await callClaude({
+        max_tokens: 800,
+        system: `You are a Pokémon TCG expert with knowledge of Spanish card sets.
+Return ONLY valid JSON array, no markdown:
+[{"name":"Spanish name","setName":"set name","setId":"sv3","number":"123","rarity":"Rare Holo"}]
+Include Spanish cards (Scarlet & Violet era and older sets with Spanish print runs).`,
+        messages:[{role:"user",content:`List Spanish Pokémon TCG cards for: ${q}`}]
+      });
+      const t = d.content?.find(b=>b.type==="text")?.text||"[]";
+      const parsed = robustJsonParse(t);
+      const arr = Array.isArray(parsed) ? parsed : (parsed.cards||[]);
+      const esCards = arr.filter(Boolean).map((c,i)=>({
+        id:`es_claude_${i}`,
+        name: c.name||q,
+        number: c.number||"?",
+        rarity: c.rarity||"?",
+        set:{ id:c.setId||"?", name:c.setName||c.setId||"?" },
+        images: null,
+        language:"Spanish", usd:null, clp:null,
+        owned:inv.some(i=>(i.officialName||i.name)?.toLowerCase()===c.name?.toLowerCase()&&i.language==="Spanish")
+      }));
+      setEsResults(esCards);
     } catch {}
     setEsLoading(false);
   };
