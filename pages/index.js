@@ -1502,53 +1502,66 @@ function CollectTab({inv}) {
     try {
       const q = query.trim();
 
-      // Search EN (pokemontcg.io)
+      // 1. Search pokemontcg.io for EN cards
       const enFetch = fetch(
         `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:"${q}"`)}&pageSize=50&select=id,name,set,rarity,images,types,number,tcgplayer&orderBy=-set.releaseDate`,
         { headers: { "Accept":"application/json" } }
       ).then(r=>r.ok?r.json():{data:[]}).catch(()=>({data:[]}));
 
-      // Search JP and ES (TCGdex) in parallel
-      const tcgFetch = async (lang) => {
-        try {
-          const r = await fetch(`https://api.tcgdex.net/v2/${lang}/cards?name=${encodeURIComponent(q)}&pagination:limit=30`);
-          if (!r.ok) return [];
-          const arr = await r.json();
-          if (!Array.isArray(arr)) return [];
-          // Fetch detail for image + pricing
-          const details = await Promise.all(arr.slice(0,20).map(async c=>{
-            try { const dr=await fetch(`https://api.tcgdex.net/v2/${lang}/cards/${c.id}`); if(dr.ok)return dr.json(); } catch {}
-            return c;
-          }));
-          return details.filter(Boolean).map(c=>({
-            id:`${lang}_${c.id}`,
-            name: c.name,
-            number: c.localId,
-            rarity: c.rarity,
-            set: { id: c.set?.id||"?", name: c.set?.name||c.set?.id||"?" },
-            images: c.image ? { small: c.image+"/low.webp", large: c.image+"/high.webp" } : null,
-            language: lang==="ja"?"Japanese":"Spanish",
-            usd: null, clp: null, // TCGdex pricing often missing for JP/ES
-          }));
-        } catch { return []; }
-      };
+      // 2. Search TCGdex EN to get card IDs, then fetch JP/ES versions
+      const tcgdexEnFetch = fetch(
+        `https://api.tcgdex.net/v2/en/cards?name=${encodeURIComponent(q)}&pagination:limit=30`
+      ).then(r=>r.ok?r.json():[]).catch(()=>[]);
 
-      const [enData, jpCards, esCards] = await Promise.all([enFetch, tcgFetch("ja"), tcgFetch("es")]);
+      const [enData, tcgdexIds] = await Promise.all([enFetch, tcgdexEnFetch]);
 
-      const enCards = (enData.data||[]).map(c=>{
+      // EN cards from pokemontcg.io
+      const enCards = (enData.data||[]).map(c => {
         const prices = c.tcgplayer?.prices;
         const tier = prices?.holofoil||prices?.normal||prices?.reverseHolofoil||null;
         const usd = tier?.market||tier?.mid||null;
         return { ...c, language:"English", usd, clp: usd?Math.round(usd*950):null };
       });
 
-      const allCards = [...enCards, ...jpCards, ...esCards].map(c=>({
+      // For each TCGdex card ID, fetch JP and ES versions in parallel
+      const ids = Array.isArray(tcgdexIds) ? tcgdexIds.slice(0,20).map(c=>c.id).filter(Boolean) : [];
+
+      const fetchLang = async (lang, ids) => {
+        const cards = await Promise.all(ids.map(async id => {
+          try {
+            const r = await fetch(`https://api.tcgdex.net/v2/${lang}/cards/${id}`);
+            if (!r.ok) return null;
+            const d = await r.json();
+            if (!d?.name) return null;
+            return {
+              id: `${lang}_${id}`,
+              name: d.name,
+              number: d.localId,
+              rarity: d.rarity,
+              set: { id: d.set?.id||"?", name: d.set?.name||d.set?.id||"?" },
+              images: d.image ? { small: d.image+"/low.webp", large: d.image+"/high.webp" } : null,
+              language: lang==="ja" ? "Japanese" : "Spanish",
+              usd: null, clp: null,
+            };
+          } catch { return null; }
+        }));
+        return cards.filter(Boolean);
+      };
+
+      const [jpCards, esCards] = await Promise.all([
+        fetchLang("ja", ids),
+        fetchLang("es", ids),
+      ]);
+
+      const allCards = [...enCards, ...jpCards, ...esCards].map(c => ({
         ...c,
-        owned: inv.some(i=>
-          (i.officialName||i.name)?.toLowerCase()===c.name?.toLowerCase() &&
-          (i.language==="Japanese"?"ja":i.language==="Spanish"?"es":"en")===
-          (c.language==="Japanese"?"ja":c.language==="Spanish"?"es":"en")
-        )
+        owned: inv.some(i => {
+          const iName = (i.officialName||i.name||"").toLowerCase();
+          const cName = (c.name||"").toLowerCase();
+          const iLang = i.language==="Japanese"?"ja":i.language==="Spanish"?"es":"en";
+          const cLang = c.language==="Japanese"?"ja":c.language==="Spanish"?"es":"en";
+          return iName===cName && iLang===cLang;
+        })
       }));
 
       setResults(allCards);
