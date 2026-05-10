@@ -81,24 +81,26 @@ const JP_ONLY_SETS = new Set(["sv8a","sv7a","sv5a","sv3a","sv1a","sv1S","sv1V","
 
 function robustJsonParse(text) {
   if (!text) return { cards:[] };
-  // Remove markdown fences
   let clean = text.replace(/```json|```/g, "").trim();
-  // Find the JSON object/array boundaries
-  const start = clean.indexOf("{");
-  const end   = clean.lastIndexOf("}");
-  if (start !== -1 && end !== -1 && end > start) {
-    clean = clean.slice(start, end + 1);
+
+  // Try direct parse first
+  try { return JSON.parse(clean); } catch {}
+
+  // Try to find JSON array
+  const arrStart = clean.indexOf("[");
+  const arrEnd   = clean.lastIndexOf("]");
+  if (arrStart !== -1 && arrEnd > arrStart) {
+    try { return JSON.parse(clean.slice(arrStart, arrEnd+1)); } catch {}
   }
-  try {
-    return JSON.parse(clean);
-  } catch {
-    // Try to extract partial cards array
-    try {
-      const match = clean.match(/"cards"\s*:\s*(\[[\s\S]*?\])/);
-      if (match) return { cards: JSON.parse(match[1]) };
-    } catch {}
-    return { cards:[] };
+
+  // Try to find JSON object
+  const objStart = clean.indexOf("{");
+  const objEnd   = clean.lastIndexOf("}");
+  if (objStart !== -1 && objEnd > objStart) {
+    try { return JSON.parse(clean.slice(objStart, objEnd+1)); } catch {}
   }
+
+  return { cards:[] };
 }
 
 async function identifyCards(base64, mimeType) {
