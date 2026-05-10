@@ -1529,14 +1529,13 @@ function CollectTab({inv}) {
     // Load JP in background
     setJpLoading(true);
     try {
-      const r = await fetch(`https://api.tcgdex.net/v2/en/cards?name=${encodeURIComponent(q)}&pagination:limit=15`);
+      const r = await fetch(`/api/tcgdex?path=${encodeURIComponent(`en/cards?name=${encodeURIComponent(q)}&pagination:limit=15`)}`);
       if (r.ok) {
         const ids = await r.json();
         if (Array.isArray(ids) && ids.length) {
-          // Batch fetch JP — limit to 8 to avoid timeout
           const jpCards = await Promise.all(ids.slice(0,8).map(async c=>{
             try {
-              const dr = await fetch(`https://api.tcgdex.net/v2/ja/cards/${c.id}`);
+              const dr = await fetch(`/api/tcgdex?path=${encodeURIComponent(`ja/cards/${c.id}`)}`);
               if (!dr.ok) return null;
               const d = await dr.json();
               if (!d?.name||!d?.image) return null;
@@ -1557,13 +1556,13 @@ function CollectTab({inv}) {
     // Load ES in background
     setEsLoading(true);
     try {
-      const r = await fetch(`https://api.tcgdex.net/v2/en/cards?name=${encodeURIComponent(q)}&pagination:limit=15`);
+      const r = await fetch(`/api/tcgdex?path=${encodeURIComponent(`en/cards?name=${encodeURIComponent(q)}&pagination:limit=15`)}`);
       if (r.ok) {
         const ids = await r.json();
         if (Array.isArray(ids) && ids.length) {
           const esCards = await Promise.all(ids.slice(0,8).map(async c=>{
             try {
-              const dr = await fetch(`https://api.tcgdex.net/v2/es/cards/${c.id}`);
+              const dr = await fetch(`/api/tcgdex?path=${encodeURIComponent(`es/cards/${c.id}`)}`);
               if (!dr.ok) return null;
               const d = await dr.json();
               if (!d?.name||!d?.image) return null;
